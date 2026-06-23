@@ -336,12 +336,12 @@ public final class RuntimeStore {
     }
 
     private func memoryTrend24h(now: Date, bucketCount: Int = 48) -> [MemoryTrendPoint] {
-        let start = now.addingTimeInterval(-24 * 60 * 60)
+        let windowStart = now.addingTimeInterval(-24 * 60 * 60)
         let processSamples = processMemoryHistory.items
-            .filter { $0.time >= start && $0.time <= now }
+            .filter { $0.time >= windowStart && $0.time <= now }
             .sorted { $0.time < $1.time }
         let physicalSamples = memoryHistory.items
-            .filter { $0.metric == "Physical Memory" && $0.updatedAt >= start && $0.updatedAt <= now }
+            .filter { $0.metric == "Physical Memory" && $0.updatedAt >= windowStart && $0.updatedAt <= now }
             .sorted { $0.updatedAt < $1.updatedAt }
             .map {
                 MemoryTrendPoint(
@@ -351,10 +351,11 @@ public final class RuntimeStore {
                     source: $0.source
                 )
             }
-        let samples = processSamples.isEmpty ? physicalSamples : processSamples
+        let samples = physicalSamples.isEmpty ? processSamples : physicalSamples
         guard samples.count > bucketCount else { return samples }
 
-        let bucketSeconds = now.timeIntervalSince(start) / Double(max(1, bucketCount))
+        let start = max(windowStart, samples.first?.time ?? windowStart)
+        let bucketSeconds = max(1, now.timeIntervalSince(start)) / Double(max(1, bucketCount))
         var buckets = Array<MemoryTrendPoint?>(repeating: nil, count: max(1, bucketCount))
         for sample in samples {
             let index = min(

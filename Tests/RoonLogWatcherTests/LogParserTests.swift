@@ -32,6 +32,68 @@ final class LogParserTests: XCTestCase {
         XCTAssertEqual(trend.first?.valueMB, 845)
     }
 
+    func testMemoryTrendKeepsPhysicalLogMetricWhenProcessSamplerAppears() {
+        let store = RuntimeStore()
+        let now = Date().addingTimeInterval(-10 * 60)
+
+        for index in 0..<6 {
+            let time = now.addingTimeInterval(TimeInterval(index * 60))
+            store.ingest(
+                file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+                line: "memory \(index)",
+                events: [memoryEvent(time: time, valueMB: Double(900 + index))],
+                mode: .live
+            )
+        }
+
+        store.updateSystemStatus(LocalSystemStatus(
+            sampledAt: Date(),
+            host: RoonHostStatus(
+                isRoonServerLikely: true,
+                reason: "test",
+                detectedProcesses: ["RoonServer"],
+                detectedLogDirectories: ["/tmp/RoonServer/Logs"],
+                checkedAt: Date()
+            ),
+            processes: [],
+            totalCPUPercent: 0,
+            totalMemoryMB: 512,
+            openFileCount: nil,
+            logVolumePath: nil,
+            logVolumeFreeMB: nil,
+            logVolumeFreeRatio: nil
+        ))
+
+        let trend = store.snapshot().memoryTrend24h
+
+        XCTAssertEqual(trend.count, 6)
+        XCTAssertTrue(trend.allSatisfy { $0.metric == "Physical Memory" })
+        XCTAssertEqual(trend.last?.valueMB, 905)
+    }
+
+    func testMemoryTrendBucketsDenseFirstHourWithoutCollapsingToEmptyDay() {
+        let store = RuntimeStore()
+        let now = Date().addingTimeInterval(-5)
+        let firstSample = now.addingTimeInterval(-59 * 60)
+
+        for index in 0..<60 {
+            let time = firstSample.addingTimeInterval(TimeInterval(index * 60))
+            store.ingest(
+                file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+                line: "memory \(index)",
+                events: [memoryEvent(time: time, valueMB: Double(1_000 + index))],
+                mode: .live
+            )
+        }
+
+        let trend = store.snapshot().memoryTrend24h
+
+        XCTAssertGreaterThanOrEqual(trend.count, 40)
+        XCTAssertLessThanOrEqual(trend.count, 48)
+        XCTAssertEqual(trend.last?.metric, "Physical Memory")
+        XCTAssertEqual(trend.last?.valueMB, 1_059)
+    }
+
     func testManagedMemoryBelowNinetyTwoPercentDoesNotWarn() {
         let parser = LogParser()
         var configuration = AppConfiguration.default
@@ -453,5 +515,20 @@ final class LogParserTests: XCTestCase {
 
         XCTAssertEqual(snapshot.counters.watchedFileCount, 1)
         XCTAssertEqual(snapshot.watchedSources.map(\.path), ["/tmp/RoonServer/Logs/RoonServer_log.txt"])
+    }
+
+    private func memoryEvent(time: Date, valueMB: Double) -> RuntimeEvent {
+        RuntimeEvent(
+            id: UUID().uuidString,
+            time: time,
+            domain: "memory",
+            type: "memory.sample.detected",
+            severity: .info,
+            title: "Physical Memory",
+            message: "Physical Memory: \(Int(valueMB)) MB",
+            source: "RoonServer/RoonServer_log.txt",
+            valueMB: valueMB,
+            zone: nil
+        )
     }
 }

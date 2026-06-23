@@ -979,7 +979,7 @@ enum DashboardAssets {
 
     .pane-header {
       display: grid;
-      grid-template-columns: max-content minmax(180px, 1fr) max-content;
+      grid-template-columns: max-content minmax(280px, 1fr) max-content;
       justify-content: space-between;
       gap: 16px;
       padding: 0 18px;
@@ -987,7 +987,8 @@ enum DashboardAssets {
 
     .memory-trend-header {
       min-width: 0;
-      max-width: 520px;
+      width: 100%;
+      max-width: none;
       justify-self: stretch;
       display: grid;
       grid-template-columns: max-content minmax(90px, 1fr) max-content max-content;
