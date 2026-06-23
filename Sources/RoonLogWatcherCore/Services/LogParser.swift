@@ -73,8 +73,23 @@ public struct LogParser {
             )
         ]
 
-        if lower.contains("buffering") {
-            events.append(event(domain: "playback", type: "playback.buffering", severity: .warning, title: "Playback buffering", message: trimmed(line), source: source, time: time, zone: zone))
+        let hasBuffering = lower.contains("buffering")
+        let hasPlaybackProblem = lower.contains("timeout")
+            || lower.contains("failed")
+            || lower.contains("networkerror")
+            || lower.contains("network error")
+            || lower.contains("dropped")
+        if hasBuffering || hasPlaybackProblem {
+            events.append(event(
+                domain: "playback",
+                type: hasBuffering ? "playback.buffering" : "playback.warning.detected",
+                severity: .info,
+                title: hasBuffering ? "Playback buffering observed" : "Playback issue observed",
+                message: trimmed(line),
+                source: source,
+                time: time,
+                zone: zone
+            ))
         }
         if lower.contains("[playing @") || lower.contains("onplayfeedback playing") {
             events.append(event(domain: "playback", type: "playback.playing", severity: .info, title: "Playback playing", message: trimmed(line), source: source, time: time, zone: zone))
@@ -82,28 +97,23 @@ public struct LogParser {
         if lower.contains("[stopped @") || lower.contains("onplayfeedback stopped") {
             events.append(event(domain: "playback", type: "playback.stopped", severity: .info, title: "Playback stopped", message: trimmed(line), source: source, time: time, zone: zone))
         }
-        if lower.contains("timeout") || lower.contains("failed") || lower.contains("networkerror") || lower.contains("dropped") {
-            events.append(event(domain: "playback", type: "playback.warning.detected", severity: .warning, title: "Playback warning", message: trimmed(line), source: source, time: time, zone: zone))
-        }
 
         return events
     }
 
     private func parseRaat(line: String, lower: String, source: String, time: Date) -> [RuntimeEvent] {
-        guard lower.contains("raat")
+        let hasRaatContext = lower.contains("raat")
             || lower.contains("tcpaudiosource")
             || lower.contains("transport lost")
             || lower.contains("device lost")
-            || lower.contains("disconnect")
-            || lower.contains("reconnect")
-        else { return [] }
+        guard hasRaatContext else { return [] }
 
         let zone = extractZone(from: line)
+        if lower.contains("disconnect") || lower.contains("transport lost") || lower.contains("device lost") {
+            return [event(domain: "raat", type: "raat.disconnected", severity: .info, title: "RAAT disconnect observed", message: trimmed(line), source: source, time: time, zone: zone)]
+        }
         if lower.contains("connected") || lower.contains("reconnect") {
             return [event(domain: "raat", type: "raat.connected", severity: .info, title: "RAAT connected", message: trimmed(line), source: source, time: time, zone: zone)]
-        }
-        if lower.contains("disconnect") || lower.contains("transport lost") || lower.contains("device lost") {
-            return [event(domain: "raat", type: "raat.disconnected", severity: .warning, title: "RAAT disconnected", message: trimmed(line), source: source, time: time, zone: zone)]
         }
         return []
     }
@@ -126,16 +136,18 @@ public struct LogParser {
     }
 
     private func parseMediaRetries(line: String, lower: String, source: String, time: Date) -> [RuntimeEvent] {
-        guard lower.contains("failed to get image data")
+        let imageFetchRetry = lower.contains("failed to get image data")
             && (lower.contains("ioexception") || lower.contains("attempt"))
-        else { return [] }
+        let imageProcessingNotice = lower.contains("image_process")
+            && (lower.contains("notsupportedexception") || lower.contains("image format"))
+        guard imageFetchRetry || imageProcessingNotice else { return [] }
 
         let exhaustedRetries = lower.contains("attempt 3/3") || lower.contains("attempt 3 of 3")
         return [event(
             domain: "media",
-            type: exhaustedRetries ? "media.image_failed" : "media.image_retry",
-            severity: exhaustedRetries ? .warning : .info,
-            title: exhaustedRetries ? "Image fetch failed" : "Image fetch retry",
+            type: imageProcessingNotice ? "media.image_processing_notice" : (exhaustedRetries ? "media.image_failed" : "media.image_retry"),
+            severity: .info,
+            title: imageProcessingNotice ? "Image processing notice" : (exhaustedRetries ? "Image fetch failed" : "Image fetch retry"),
             message: trimmed(line),
             source: source,
             time: time
@@ -150,16 +162,12 @@ public struct LogParser {
         if lower.contains("shutdown") || lower.contains("stopping roon") || lower.contains("server stopped") {
             events.append(event(domain: "server", type: "server.stopped", severity: .warning, title: "Server stopped", message: trimmed(line), source: source, time: time))
         }
-        if lower.contains("fatal")
-            || lower.contains("crash")
-            || lower.contains("panic")
-            || lower.contains("unhandled exception")
-            || lower.contains("uncaught exception")
-            || lower.contains("outofmemory")
-            || lower.contains("out of memory")
-            || lower.contains("segmentation fault")
-        {
+        if isFatalServerProblem(lower) {
             events.append(event(domain: "server", type: "server.exception", severity: .critical, title: "Server exception", message: trimmed(line), source: source, time: time))
+        } else if lower.contains("exception"), isKnownNonFatalRoonException(lower) {
+            events.append(event(domain: "server", type: "server.exception.notice", severity: .info, title: "Server exception notice", message: trimmed(line), source: source, time: time))
+        } else if lower.contains("critical:") {
+            events.append(event(domain: "server", type: "server.critical.warning", severity: .warning, title: "Server critical log entry", message: trimmed(line), source: source, time: time))
         } else if lower.contains("exception") {
             events.append(event(domain: "server", type: "server.exception.warning", severity: .warning, title: "Server exception warning", message: trimmed(line), source: source, time: time))
         }
@@ -197,14 +205,30 @@ public struct LogParser {
             || lower.contains("slow query")
             || lower.contains("query took")
             || lower.contains("timeout")
-            || lower.contains("failed")
             || lower.contains("rollback")
+        {
+            return [event(
+                domain: "database",
+                type: "database.notice",
+                severity: .info,
+                title: "Database transient state",
+                message: trimmed(line),
+                source: source,
+                time: time
+            )]
+        }
+
+        if lower.contains("failed")
+            || lower.contains("unable to open")
+            || lower.contains("cannot open")
+            || lower.contains("i/o error")
+            || lower.contains("io error")
         {
             return [event(
                 domain: "database",
                 type: "database.warning",
                 severity: .warning,
-                title: "Database warning",
+                title: "Database failure",
                 message: trimmed(line),
                 source: source,
                 time: time
@@ -301,10 +325,27 @@ public struct LogParser {
     }
 
     private func severity(for lower: String) -> Severity {
-        if lower.contains("fatal") || lower.contains("crash") || lower.contains("corrupt") {
+        if isFatalServerProblem(lower)
+            || lower.contains("database disk image is malformed")
+            || lower.contains("database corruption")
+            || lower.contains("corrupt")
+        {
             return .critical
         }
-        if lower.contains("warning") || lower.contains("timeout") || lower.contains("failed") || lower.contains("disconnect") {
+        if lower.contains("critical:") && !isKnownNonFatalRoonException(lower) {
+            return .warning
+        }
+        if containsAny(lower, [
+            "failed to start",
+            "failed starting",
+            "cannot open",
+            "unable to open",
+            "permission denied",
+            "access denied",
+            "authentication failed",
+            "i/o error",
+            "io error"
+        ]) {
             return .warning
         }
         return .info
@@ -315,7 +356,42 @@ public struct LogParser {
     }
 
     private func trimmed(_ value: String) -> String {
-        String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2_000))
+    }
+
+    private func isFatalServerProblem(_ lower: String) -> Bool {
+        containsAny(lower, [
+            "fatal",
+            "crash",
+            "panic",
+            "unhandled exception",
+            "uncaught exception",
+            "outofmemory",
+            "out of memory",
+            "segmentation fault"
+        ])
+    }
+
+    private func isKnownNonFatalRoonException(_ lower: String) -> Bool {
+        containsAny(lower, [
+            "version changed out from under us",
+            "already sent a final response",
+            "exception caught",
+            "exception thrown. restarting connection",
+            "operationcanceled",
+            "operation canceled",
+            "connectionclosedprematurely",
+            "websocket connection",
+            "web exception without response",
+            "hostnotfound",
+            "connectionreset",
+            "not supported",
+            "image format"
+        ])
+    }
+
+    private func containsAny(_ lower: String, _ patterns: [String]) -> Bool {
+        patterns.contains { lower.contains($0) }
     }
 
     private func toMB(_ value: Double, unit: String) -> Double {

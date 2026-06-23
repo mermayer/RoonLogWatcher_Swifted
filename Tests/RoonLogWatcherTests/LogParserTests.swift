@@ -14,22 +14,33 @@ final class LogParserTests: XCTestCase {
         XCTAssertTrue(events.contains { $0.title == "Unmanaged Memory" && $0.valueMB == 461 })
     }
 
-    func testParsesPlaybackWarningWithZone() {
+    func testParsesPlaybackBufferingAsNoticeWithZone() {
         let parser = LogParser()
         let events = parser.parse(
             file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
             line: "06/22 17:03:24 Warn: [zone Living Room] state changed: Prepared => Buffering timeout"
         )
 
-        XCTAssertTrue(events.contains { $0.type == "playback.buffering" && $0.zone == "Living Room" })
-        XCTAssertTrue(events.contains { $0.type == "playback.warning.detected" && $0.severity == .warning })
+        XCTAssertTrue(events.contains { $0.type == "playback.buffering" && $0.zone == "Living Room" && $0.severity == .info })
+        XCTAssertFalse(events.contains { $0.domain == "playback" && $0.severity != .info })
     }
 
-    func testParsesDatabaseLockAsWarningHealthEvent() {
+    func testParsesDatabaseLockAsTransientNotice() {
         let parser = LogParser()
         let events = parser.parse(
             file: "/tmp/RoonServer/Logs/database.log",
             line: "06/22 17:14:13 Error: SQLite busy (database is locked)"
+        )
+
+        XCTAssertTrue(events.contains { $0.domain == "database" && $0.type == "database.notice" && $0.severity == .info })
+        XCTAssertFalse(events.contains { $0.domain == "database" && $0.severity == .warning })
+    }
+
+    func testParsesDatabaseFailureAsWarningHealthEvent() {
+        let parser = LogParser()
+        let events = parser.parse(
+            file: "/tmp/RoonServer/Logs/database.log",
+            line: "06/22 17:14:13 Error: SQLite failed to open database file"
         )
 
         XCTAssertTrue(events.contains { $0.domain == "database" && $0.type == "database.warning" && $0.severity == .warning })
@@ -45,15 +56,26 @@ final class LogParserTests: XCTestCase {
         XCTAssertTrue(events.contains { $0.domain == "database" && $0.type == "database.critical" && $0.severity == .critical })
     }
 
-    func testClassifiesRetryExceptionsAsWarningNotCritical() {
+    func testClassifiesRetryExceptionsAsInfoNotCritical() {
         let parser = LogParser()
         let events = parser.parse(
             file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
             line: "06/22 23:43:59 Warn: [concurrency] exception caught, but version changed out from under us. retry"
         )
 
-        XCTAssertTrue(events.contains { $0.domain == "server" && $0.type == "server.exception.warning" && $0.severity == .warning })
-        XCTAssertFalse(events.contains { $0.severity == .critical })
+        XCTAssertTrue(events.contains { $0.domain == "server" && $0.type == "server.exception.notice" && $0.severity == .info })
+        XCTAssertFalse(events.contains { $0.severity == .warning || $0.severity == .critical })
+    }
+
+    func testClassifiesKnownRoonCriticalApiExceptionAsInfo() {
+        let parser = LogParser()
+        let events = parser.parse(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: "06/23 16:03:45 Critical: while dispatching events: System.InvalidOperationException: Already sent a final response"
+        )
+
+        XCTAssertTrue(events.contains { $0.domain == "server" && $0.type == "server.exception.notice" && $0.severity == .info })
+        XCTAssertFalse(events.contains { $0.severity == .warning || $0.severity == .critical })
     }
 
     func testClassifiesImageRetryAndFileCacheStatusAsNonCritical() {
@@ -149,7 +171,75 @@ final class LogParserTests: XCTestCase {
         XCTAssertEqual(snapshot.health.state, .degraded)
         XCTAssertGreaterThanOrEqual(snapshot.health.score, 70)
         XCTAssertEqual(playbackSignal?.severity, .warning)
-        XCTAssertEqual(playbackSignal?.count, 12)
+        XCTAssertEqual(playbackSignal?.count, 6)
+        XCTAssertEqual(snapshot.counters.warningCount, 0)
+    }
+
+    func testSingleRaatDisconnectDoesNotCreateHealthWarning() {
+        let parser = LogParser()
+        let store = RuntimeStore()
+        let line = "Debug: [raat/tcpaudiosource] disconnecting"
+
+        store.ingest(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: line,
+            events: parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line),
+            mode: .live
+        )
+
+        let snapshot = store.snapshot()
+
+        XCTAssertFalse(snapshot.health.signals.contains { $0.id == "raat.unstable" || $0.id == "raat.disconnected" })
+        XCTAssertEqual(snapshot.counters.warningCount, 0)
+    }
+
+    func testRaatDisconnectBurstEscalatesHealth() {
+        let parser = LogParser()
+        let store = RuntimeStore()
+
+        for index in 0..<2 {
+            let line = "Warn: [raat/tcpaudiosource] transport lost \(index)"
+            store.ingest(
+                file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+                line: line,
+                events: parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line),
+                mode: .live
+            )
+        }
+
+        let snapshot = store.snapshot()
+        let raatSignal = snapshot.health.signals.first { $0.id == "raat.unstable" }
+
+        XCTAssertEqual(raatSignal?.severity, .warning)
+        XCTAssertEqual(raatSignal?.count, 2)
+        XCTAssertEqual(snapshot.counters.warningCount, 0)
+    }
+
+    func testRuntimeStoreRetainsMoreThanEightyAlerts() {
+        let store = RuntimeStore()
+
+        for index in 0..<120 {
+            let event = RuntimeEvent(
+                id: "critical-\(index)",
+                time: Date(),
+                domain: "server",
+                type: "server.exception",
+                severity: .critical,
+                title: "Server exception",
+                message: "fatal test event \(index)",
+                source: "RoonServer/RoonServer_log.txt",
+                valueMB: nil,
+                zone: nil
+            )
+            store.ingest(
+                file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+                line: "fatal test event \(index)",
+                events: [event],
+                mode: .live
+            )
+        }
+
+        XCTAssertEqual(store.snapshot().alerts.count, 120)
     }
 
     func testRuntimeSnapshotIncludesSystemStatusAndHealthTrend() {

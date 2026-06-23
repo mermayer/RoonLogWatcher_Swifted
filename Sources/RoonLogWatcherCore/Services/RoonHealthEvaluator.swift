@@ -342,29 +342,14 @@ struct RoonHealthEvaluator {
                 windowMinutes: rules.raatWindowMinutes,
                 zone: disconnects.last?.zone
             ))
-        } else if let latestRaat = events.last(where: { $0.domain == "raat" }),
-                  latestRaat.type == "raat.disconnected",
-                  now.timeIntervalSince(latestRaat.time) >= 0,
-                  now.timeIntervalSince(latestRaat.time) <= 30 * 60 {
-            signals.append(signal(
-                id: "raat.disconnected",
-                domain: "raat",
-                severity: .warning,
-                title: "Latest RAAT state disconnected",
-                message: latestRaat.message,
-                impact: 12,
-                observedAt: latestRaat.time,
-                source: latestRaat.source,
-                zone: latestRaat.zone
-            ))
         }
     }
 
     private func evaluatePlayback(now: Date, events: [RuntimeEvent], rules: HealthRuleConfiguration, into signals: inout [RoonHealthSignal]) {
         let recentPlayback = recentEvents(now: now, events: events, minutes: rules.playbackWindowMinutes).filter {
-            $0.domain == "playback" && $0.severity != .info
+            $0.domain == "playback" && ($0.type == "playback.buffering" || $0.type == "playback.warning.detected")
         }
-        guard !recentPlayback.isEmpty else { return }
+        guard recentPlayback.count >= rules.playbackCriticalCount else { return }
         let criticalThreshold = max(rules.playbackCriticalCount * 3, rules.playbackCriticalCount + 1)
         let isCritical = recentPlayback.count >= criticalThreshold
         let impact = isCritical ? min(32, 20 + recentPlayback.count) : min(24, 8 + recentPlayback.count * 2)
@@ -373,7 +358,7 @@ struct RoonHealthEvaluator {
             domain: "playback",
             severity: isCritical ? .critical : .warning,
             title: "Playback instability",
-            message: "\(recentPlayback.count) playback warning event(s) in the configured window.",
+            message: "\(recentPlayback.count) playback buffering or retry event(s) in the configured window.",
             impact: impact,
             observedAt: recentPlayback.map(\.time).max(),
             count: recentPlayback.count,

@@ -9,9 +9,9 @@ public final class RuntimeStore {
     private var sequence = 0
     private var recentLogs: BoundedArray<LogLine>
     private var logHistory: BoundedArray<LogLine>
-    private var timeline = BoundedArray<RuntimeEvent>(limit: 200)
-    private var alerts = BoundedArray<RuntimeEvent>(limit: 80)
-    private var playback = BoundedArray<RuntimeEvent>(limit: 80)
+    private var timeline = BoundedArray<RuntimeEvent>(limit: 1_000)
+    private var alerts = BoundedArray<RuntimeEvent>(limit: 500)
+    private var playback = BoundedArray<RuntimeEvent>(limit: 240)
     private var memoryByMetric: [String: MemoryMetric] = [:]
     private var memoryHistory = BoundedArray<MemoryMetric>(limit: 600)
     private var sources: [String: WatchedSource] = [:]

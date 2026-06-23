@@ -177,7 +177,7 @@ final class StatusBarController {
 
         let alertTitle: String
         if let latestAlert = summary.alerts.first {
-            alertTitle = "\(localizedSeverity(latestAlert.severity)): \(latestAlert.title)"
+            alertTitle = "\(localizedSeverity(latestAlert.severity)): \(latestAlert.title) - \(latestAlert.message)"
         } else {
             alertTitle = menuText(en: "No recent alerts", de: "Keine aktuellen Warnungen")
         }

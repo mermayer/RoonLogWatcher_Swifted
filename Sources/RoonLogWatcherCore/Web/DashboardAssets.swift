@@ -148,6 +148,20 @@ enum DashboardAssets {
                 <button class="tab" data-alert-filter="critical"><span data-i18n="filter.errors">Errors</span> <span id="errorAlertCount">0</span></button>
                 <button class="tab" data-alert-filter="warning"><span data-i18n="filter.warnings">Warnings</span> <span id="warningAlertCount">0</span></button>
               </div>
+              <div id="alertDetail" class="alert-detail" hidden>
+                <div class="alert-detail-meta">
+                  <span id="alertDetailLevel" class="level-badge level-info">INFO</span>
+                  <span id="alertDetailTime">--</span>
+                  <span id="alertDetailSource">--</span>
+                </div>
+                <strong id="alertDetailTitle">--</strong>
+                <pre id="alertDetailMessage"></pre>
+                <div class="alert-detail-actions">
+                  <span id="alertDetailStatus"></span>
+                  <button class="small-button" id="copyAlertMessage" type="button" data-i18n="action.copy">Copy</button>
+                  <button class="small-button" id="closeAlertDetail" type="button" data-i18n="action.close">Close</button>
+                </div>
+              </div>
               <div id="alertList" class="alert-list"></div>
               <a class="text-link" href="/api/snapshot" data-i18n="link.viewAllAlerts">View all alerts...</a>
             </section>
@@ -1165,7 +1179,8 @@ enum DashboardAssets {
     .level-critical { color: var(--level-critical); background: var(--level-critical-bg); }
     .level-debug { color: var(--level-debug); background: var(--level-debug-bg); }
 
-    .log-detail {
+    .log-detail,
+    .alert-detail {
       display: grid;
       gap: 10px;
       padding: 12px 18px;
@@ -1173,25 +1188,40 @@ enum DashboardAssets {
       background: rgba(18, 23, 29, 0.74);
     }
 
-    .log-detail[hidden] {
+    .alert-detail {
+      border-top: 1px solid var(--line);
+    }
+
+    .alert-detail strong {
+      color: #e7edf4;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .log-detail[hidden],
+    .alert-detail[hidden] {
       display: none;
     }
 
     .log-detail-meta,
-    .log-detail-actions {
+    .log-detail-actions,
+    .alert-detail-meta,
+    .alert-detail-actions {
       display: flex;
       align-items: center;
       gap: 10px;
       min-width: 0;
     }
 
-    .log-detail-meta span:not(.level-badge) {
+    .log-detail-meta span:not(.level-badge),
+    .alert-detail-meta span:not(.level-badge) {
       color: var(--muted);
       font-size: 12px;
       white-space: nowrap;
     }
 
-    .log-detail pre {
+    .log-detail pre,
+    .alert-detail pre {
       margin: 0;
       max-height: 82px;
       overflow: auto;
@@ -1201,7 +1231,12 @@ enum DashboardAssets {
       font: 12px/1.5 "SF Mono", Menlo, Consolas, monospace;
     }
 
-    #detailStatus {
+    .alert-detail pre {
+      max-height: 160px;
+    }
+
+    #detailStatus,
+    #alertDetailStatus {
       margin-right: auto;
       color: var(--muted);
       font-size: 12px;
@@ -1396,6 +1431,12 @@ enum DashboardAssets {
     .alert-row {
       grid-template-columns: 14px 1fr auto;
       align-items: start;
+      cursor: pointer;
+    }
+
+    .alert-row:hover,
+    .alert-row.selected {
+      background: rgba(255, 255, 255, 0.035);
     }
 
     .alert-dot {
@@ -1429,6 +1470,17 @@ enum DashboardAssets {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .alert-row p.alert-message {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      white-space: normal;
+    }
+
+    .alert-row p.alert-source {
+      color: var(--muted);
     }
 
     .event-time {
@@ -2112,6 +2164,8 @@ enum DashboardAssets {
       filteredLogs: [],
       selectedLogId: null,
       selectedLog: null,
+      selectedAlertId: null,
+      selectedAlert: null,
       alertFilter: storedChoice(storedUIState.alertFilter, supportedAlertFilters, "all"),
       bufferedCount: 0,
       clearedThroughLogId: 0,
@@ -3005,9 +3059,17 @@ enum DashboardAssets {
     }
 
     function levelFromLine(item) {
-      const text = `${item.text || ""} ${item.severity || ""}`.toLowerCase();
-      if (item.severity === "critical" || text.includes("error") || text.includes("fatal")) return "critical";
-      if (item.severity === "warning" || text.includes("warn") || text.includes("timeout")) return "warning";
+      const severity = String(item.severity || "").toLowerCase();
+      if (severity === "critical") return "critical";
+      if (severity === "warning") return "warning";
+      if (severity === "info") {
+        const text = String(item.text || "").toLowerCase();
+        if (text.includes("debug") || text.includes("trace")) return "debug";
+        return "info";
+      }
+      const text = String(item.text || "").toLowerCase();
+      if (text.includes("fatal") || text.includes("panic") || text.includes("corrupt")) return "critical";
+      if (text.includes("warning") || text.includes("timeout")) return "warning";
       if (text.includes("debug") || text.includes("trace")) return "debug";
       return "info";
     }
@@ -3802,22 +3864,73 @@ enum DashboardAssets {
       field.remove();
     }
 
+    function alertLevel(item) {
+      const severity = String(item?.severity || "info").toLowerCase();
+      return severity === "critical" || severity === "warning" ? severity : "info";
+    }
+
+    function renderAlertDetail(item) {
+      state.selectedAlert = item;
+      state.selectedAlertId = item.id;
+      const level = alertLevel(item);
+      const label = level === "critical" ? "ERROR" : level === "warning" ? "WARN" : "INFO";
+      const panel = document.getElementById("alertDetail");
+      if (!panel) return;
+      panel.hidden = false;
+      const badge = document.getElementById("alertDetailLevel");
+      if (badge) {
+        badge.className = `level-badge level-${level}`;
+        badge.textContent = label;
+      }
+      setText("alertDetailTime", fmtPrecise(item.time));
+      setText("alertDetailSource", sourceName(item.source));
+      setText("alertDetailTitle", item.title || label);
+      setText("alertDetailMessage", item.message || "");
+      setText("alertDetailStatus", "");
+      document.querySelectorAll("[data-alert-id]").forEach(row => {
+        row.classList.toggle("selected", row.dataset.alertId === item.id);
+      });
+    }
+
+    function hideAlertDetail() {
+      state.selectedAlert = null;
+      state.selectedAlertId = null;
+      const panel = document.getElementById("alertDetail");
+      if (panel) panel.hidden = true;
+      document.querySelectorAll("[data-alert-id]").forEach(row => row.classList.remove("selected"));
+    }
+
+    async function copySelectedAlert() {
+      if (!state.selectedAlert) return;
+      const text = `[${fmtPrecise(state.selectedAlert.time)}] ${state.selectedAlert.source}: ${state.selectedAlert.title} - ${state.selectedAlert.message}`;
+      await copyText(text);
+      setText("alertDetailStatus", t("status.copied"));
+    }
+
     function renderAlerts(alerts) {
       document.querySelectorAll("[data-alert-filter]").forEach(button => {
         button.classList.toggle("active", button.dataset.alertFilter === state.alertFilter);
       });
       const filtered = alerts.filter(item => state.alertFilter === "all" || item.severity === state.alertFilter);
-      renderList("alertList", filtered.slice(0, 5), item => `
-        <div class="alert-row ${escapeHTML(item.severity || "info")}">
+      renderList("alertList", filtered.slice(0, 16), item => `
+        <div class="alert-row ${escapeHTML(item.severity || "info")} ${state.selectedAlertId === item.id ? "selected" : ""}" data-alert-id="${escapeHTML(item.id)}" role="button" tabindex="0">
           <span class="alert-dot"></span>
           <div>
             <strong class="label-with-help">${escapeHTML(item.title)}${help("health.detail.signal")}</strong>
-            <p>${escapeHTML(item.message)}</p>
-            <p>${escapeHTML(sourceName(item.source))}</p>
+            <p class="alert-message">${escapeHTML(item.message)}</p>
+            <p class="alert-source">${escapeHTML(sourceName(item.source))}</p>
           </div>
           <span class="event-time value-with-help">${fmtTime(item.time)}${help("logs.table.time")}</span>
         </div>
       `, t("noAlerts"));
+      if (state.selectedAlertId) {
+        const selected = alerts.find(item => item.id === state.selectedAlertId);
+        if (selected) {
+          renderAlertDetail(selected);
+        } else {
+          hideAlertDetail();
+        }
+      }
     }
 
     function renderPlayback(events) {
@@ -4035,6 +4148,11 @@ enum DashboardAssets {
         saveUIState();
         renderAlerts(state.lastSnapshot?.alerts || []);
       }
+      const alertRow = event.target?.closest?.("[data-alert-id]");
+      if (alertRow) {
+        const item = (state.lastSnapshot?.alerts || []).find(alert => alert.id === alertRow.dataset.alertId);
+        if (item) renderAlertDetail(item);
+      }
       const logRow = event.target?.closest?.("tr[data-log-id]");
       if (logRow) {
         const id = Number(logRow.dataset.logId);
@@ -4083,6 +4201,12 @@ enum DashboardAssets {
       }
       if (event.target?.id === "copyLogLine") {
         copySelectedLog().catch(error => setText("detailStatus", error.message));
+      }
+      if (event.target?.id === "closeAlertDetail") {
+        hideAlertDetail();
+      }
+      if (event.target?.id === "copyAlertMessage") {
+        copySelectedAlert().catch(error => setText("alertDetailStatus", error.message));
       }
       if (event.target?.id === "reloadConfig") {
         fetch("/api/config/reload", { method: "POST" })
