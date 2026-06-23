@@ -4,8 +4,11 @@ This Swift/macOS version is based on the original [`stefanmauron/roon-log-watche
 
 Roon Log Watcher is a native macOS menu bar app for watching local Roon,
 Roon Server, RAAT Server, Roon Appliance and Roon Bridge log files. It exposes a
-local browser dashboard at `http://127.0.0.1:17666`, keeps a bounded in-memory log
+browser-based dashboard at `http://127.0.0.1:17666`, keeps a bounded in-memory log
 history, highlights relevant events and calculates a weighted Roon Health score.
+The dashboard can also be opened from another system on the same network by
+using the Roon Mac's hostname or IP address with the configured dashboard port,
+provided macOS firewall and network settings allow the connection.
 
 The app can run against real local Roon logs or, when no logs are found, a demo
 feed. Direct Roon Server API access is not required.
