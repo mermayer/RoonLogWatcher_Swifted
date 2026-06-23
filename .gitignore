@@ -6,3 +6,10 @@ dist/
 *.log
 *.xcuserdata/
 DerivedData/
+
+# Local transfer notes
+TRANSFER.md
+
+# macOS AppleDouble resource fork metadata
+._*
+**/._*
