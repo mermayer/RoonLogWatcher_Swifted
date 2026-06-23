@@ -9,6 +9,18 @@ public struct LogParser {
         let time = extractTimestamp(from: line) ?? Date()
         let lower = line.lowercased()
 
+        if isKnownInformationalRoonNoise(lower) {
+            return [event(
+                domain: "log",
+                type: "log.notice",
+                severity: .info,
+                title: "Roon log notice",
+                message: trimmed(line),
+                source: source,
+                time: time
+            )]
+        }
+
         events.append(contentsOf: parseMemory(line: line, source: source, time: time))
         events.append(contentsOf: parsePlayback(line: line, lower: lower, source: source, time: time))
         events.append(contentsOf: parseRaat(line: line, lower: lower, source: source, time: time))
@@ -328,7 +340,6 @@ public struct LogParser {
         if isFatalServerProblem(lower)
             || lower.contains("database disk image is malformed")
             || lower.contains("database corruption")
-            || lower.contains("corrupt")
         {
             return .critical
         }
@@ -336,8 +347,11 @@ public struct LogParser {
             return .warning
         }
         if containsAny(lower, [
-            "failed to start",
-            "failed starting",
+            "failed to start roon",
+            "failed to start server",
+            "failed starting roon",
+            "roonserver failed to start",
+            "server failed to start",
             "cannot open",
             "unable to open",
             "permission denied",
@@ -385,8 +399,25 @@ public struct LogParser {
             "web exception without response",
             "hostnotfound",
             "connectionreset",
+            "failed to get image data",
+            "ioexception",
+            "indexoutofrangeexception",
             "not supported",
             "image format"
+        ])
+    }
+
+    private func isKnownInformationalRoonNoise(_ lower: String) -> Bool {
+        containsAny(lower, [
+            "[swim]",
+            " swim failed to start",
+            "failed to start persisted swim session",
+            "result[status=notfound]",
+            "failed to extract audio format",
+            "corruptfile",
+            "failed to load device db",
+            "scx: in onafterentry",
+            "scx: in onbeforeentry"
         ])
     }
 

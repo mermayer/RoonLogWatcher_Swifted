@@ -78,6 +78,22 @@ final class LogParserTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.severity == .warning || $0.severity == .critical })
     }
 
+    func testClassifiesRoonOperationalNoiseAsInfo() {
+        let parser = LogParser()
+        let lines = [
+            "06/23 00:08:59 Critical: scx: in OnAfterEntry: System.IndexOutOfRangeException: Index was outside the bounds of the array.",
+            "06/22 23:09:12 Warn: [zone MRIRR] Swim failed to start (Result[Status=NotFound]), bailing",
+            "06/22 23:09:02 Warn: [swim] Failed to start persisted swim session: Result[Status=NotFound]",
+            "06/22 22:46:51 Warn: [storage] [directory] Failed to extract audio format from '/music/example.mp3': CorruptFile"
+        ]
+
+        for line in lines {
+            let events = parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line)
+            XCTAssertTrue(events.contains { $0.domain == "log" && $0.type == "log.notice" && $0.severity == .info }, line)
+            XCTAssertFalse(events.contains { $0.severity == .warning || $0.severity == .critical }, line)
+        }
+    }
+
     func testClassifiesImageRetryAndFileCacheStatusAsNonCritical() {
         let parser = LogParser()
         let retryEvents = parser.parse(
@@ -91,6 +107,7 @@ final class LogParserTests: XCTestCase {
 
         XCTAssertTrue(retryEvents.contains { $0.domain == "media" && $0.type == "media.image_retry" && $0.severity == .info })
         XCTAssertTrue(cacheEvents.contains { $0.domain == "cache" && $0.type == "cache.status" && $0.severity == .info })
+        XCTAssertFalse(retryEvents.contains { $0.severity == .warning })
         XCTAssertFalse((retryEvents + cacheEvents).contains { $0.severity == .critical })
     }
 

@@ -73,6 +73,7 @@ enum DashboardAssets {
               <button class="pause-button" id="pauseStream" type="button" title="Pause live stream">Ⅱ</button>
               <label data-i18n="label.level">Level</label>
               <select id="levelFilter">
+                <option value="warningCritical" data-i18n="filter.warningCritical">Warnings + Critical</option>
                 <option value="all" data-i18n="filter.all">All</option>
                 <option value="warning" data-i18n="filter.warnings">Warnings</option>
                 <option value="critical" data-i18n="filter.critical">Critical</option>
@@ -2128,7 +2129,9 @@ enum DashboardAssets {
     static let javascript = """
     const UI_STATE_KEY = "roonLogWatcher.uiState.v1";
     const SOURCE_PROMPT_KEY = "roonLogWatcher.sourcePromptDismissed.v1";
-    const supportedLevels = ["all", "info", "warning", "critical"];
+    const DEFAULT_LEVEL = "warningCritical";
+    const LEVEL_DEFAULT_VERSION = 2;
+    const supportedLevels = ["all", "info", "warning", "critical", "warningCritical"];
     const supportedAlertFilters = ["all", "warning", "critical"];
     const supportedWindows = [15, 60, 180, 360];
 
@@ -2150,9 +2153,12 @@ enum DashboardAssets {
     }
 
     const storedUIState = readStoredUIState();
+    const initialLevel = storedUIState.levelDefaultVersion === LEVEL_DEFAULT_VERSION
+      ? storedChoice(storedUIState.level, supportedLevels, DEFAULT_LEVEL)
+      : DEFAULT_LEVEL;
 
     const state = {
-      level: storedChoice(storedUIState.level, supportedLevels, "all"),
+      level: initialLevel,
       query: "",
       configDocument: null,
       language: "en",
@@ -2205,6 +2211,7 @@ enum DashboardAssets {
         "label.autoScroll": "Auto Scroll",
         "label.level": "Level",
         "filter.all": "All",
+        "filter.warningCritical": "Warnings + Critical",
         "filter.errors": "Errors",
         "filter.warnings": "Warnings",
         "filter.critical": "Critical",
@@ -2394,6 +2401,7 @@ enum DashboardAssets {
         "label.autoScroll": "Auto-Scroll",
         "label.level": "Level",
         "filter.all": "Alle",
+        "filter.warningCritical": "Warnung + Kritisch",
         "filter.errors": "Fehler",
         "filter.warnings": "Warnungen",
         "filter.critical": "Kritisch",
@@ -2598,7 +2606,7 @@ enum DashboardAssets {
         "resource.percent": "Relative bar value for quick scanning. Thresholds are conservative visual guides, not hard Roon limits.",
         "logs.autoScroll": "When enabled, the stream stays pinned to the newest log line. Turn it off to inspect older rows without the view jumping.",
         "logs.pause": "Pauses visual updates in the browser. The background watcher continues to read and classify logs.",
-        "logs.level": "Limits visible rows by inferred level: all, warning, critical or info. Critical includes error-like log lines.",
+        "logs.level": "Limits visible rows by parser level: warnings plus critical, all, warning only, critical only or info.",
         "logs.search": "Filters the in-memory log history by message text. Combine it with Regex for pattern searches.",
         "logs.regex": "Interprets the search field as a case-insensitive regular expression. Invalid expressions fall back to plain text matching.",
         "logs.clear": "Clears the currently visible stream window in the browser. It does not delete log files or stop background ingestion.",
@@ -2685,7 +2693,7 @@ enum DashboardAssets {
         "resource.percent": "Relative Balkenanzeige zum schnellen Scannen. Die Schwellen sind visuelle Orientierung, keine harten Roon-Grenzen.",
         "logs.autoScroll": "Wenn aktiv, bleibt der Stream bei der neuesten Logzeile. Ausschalten, um ältere Zeilen zu prüfen, ohne dass die Ansicht springt.",
         "logs.pause": "Pausiert nur die sichtbaren Updates im Browser. Der Hintergrund-Watcher liest und klassifiziert weiter.",
-        "logs.level": "Begrenzt sichtbare Zeilen nach erkanntem Level: alle, Warnung, kritisch oder Info. Kritisch umfasst fehlerähnliche Logzeilen.",
+        "logs.level": "Begrenzt sichtbare Zeilen nach Parser-Level: Warnung plus kritisch, alle, nur Warnung, nur kritisch oder Info.",
         "logs.search": "Filtert die In-Memory-Loghistorie nach Nachrichtentext. Zusammen mit Regex sind Mustersuchen möglich.",
         "logs.regex": "Interpretiert das Suchfeld als case-insensitive regulären Ausdruck. Ungültige Ausdrücke fallen auf Textsuche zurück.",
         "logs.clear": "Leert das aktuell sichtbare Stream-Fenster im Browser. Logdateien werden nicht gelöscht und Ingestion läuft weiter.",
@@ -3009,6 +3017,7 @@ enum DashboardAssets {
       try {
         localStorage.setItem(UI_STATE_KEY, JSON.stringify({
           level: state.level,
+          levelDefaultVersion: LEVEL_DEFAULT_VERSION,
           autoScroll: state.autoScroll,
           alertFilter: state.alertFilter,
           volumeWindowMinutes: state.volumeWindowMinutes
@@ -3096,7 +3105,9 @@ enum DashboardAssets {
       return (logs || []).filter(item => {
         if (state.clearedThroughLogId && item.id <= state.clearedThroughLogId) return false;
         const level = levelFromLine(item);
-        const matchesLevel = state.level === "all" || state.level === level || (state.level === "critical" && level === "critical");
+        const matchesLevel = state.level === "all"
+          || state.level === level
+          || (state.level === "warningCritical" && (level === "warning" || level === "critical"));
         return matchesLevel && matchesQuery(item);
       });
     }
@@ -3916,11 +3927,11 @@ enum DashboardAssets {
         <div class="alert-row ${escapeHTML(item.severity || "info")} ${state.selectedAlertId === item.id ? "selected" : ""}" data-alert-id="${escapeHTML(item.id)}" role="button" tabindex="0">
           <span class="alert-dot"></span>
           <div>
-            <strong class="label-with-help">${escapeHTML(item.title)}${help("health.detail.signal")}</strong>
+            <strong>${escapeHTML(item.title)}</strong>
             <p class="alert-message">${escapeHTML(item.message)}</p>
             <p class="alert-source">${escapeHTML(sourceName(item.source))}</p>
           </div>
-          <span class="event-time value-with-help">${fmtTime(item.time)}${help("logs.table.time")}</span>
+          <span class="event-time">${fmtTime(item.time)}</span>
         </div>
       `, t("noAlerts"));
       if (state.selectedAlertId) {
@@ -3939,10 +3950,10 @@ enum DashboardAssets {
         <div class="play-row">
           <span class="play-icon">${playIcon(item.type)}</span>
           <div>
-            <strong class="label-with-help">${escapeHTML(item.title)}${help("events.list")}</strong>
+            <strong>${escapeHTML(item.title)}</strong>
             <p>${escapeHTML(item.zone || item.message || item.source)}</p>
           </div>
-          <span class="event-time value-with-help">${fmtTime(item.time)}${help("logs.table.time")}</span>
+          <span class="event-time">${fmtTime(item.time)}</span>
         </div>
       `, t("noPlayback"));
     }
