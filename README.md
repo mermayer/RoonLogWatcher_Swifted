@@ -12,15 +12,15 @@ feed. Direct Roon Server API access is not required.
 
 ### Dashboard
 
-![Roon Log Watcher dashboard](docs/screenshots/readme/dashboard.svg)
+![Roon Log Watcher dashboard](docs/screenshots/readme/dashboard.png)
 
 ### Configuration
 
-![Roon Log Watcher configuration](docs/screenshots/readme/configuration.svg)
+![Roon Log Watcher configuration](docs/screenshots/readme/configuration.png)
 
 ### Roon Health Details
 
-![Roon Health details](docs/screenshots/readme/health-details.svg)
+![Roon Health details](docs/screenshots/readme/health-details.png)
 
 ## What Gets Monitored
 
