@@ -70,7 +70,11 @@ public final class LogTailer {
         let latest = discoverer.discoverLogFiles()
         let latestSet = Set(latest)
         files.removeAll { file in
-            !latestSet.contains(file) && !FileManager.default.fileExists(atPath: file)
+            if latestSet.contains(file) {
+                return false
+            }
+            positions[file] = nil
+            return true
         }
         for file in latest where !files.contains(file) {
             files.append(file)

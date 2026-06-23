@@ -59,14 +59,14 @@ public struct RoonLogDiscoverer {
             .sorted()
     }
 
-    public func discoverLogFiles(maxFilesPerDirectory: Int? = nil) -> [String] {
+    public func discoverLogFiles(maxFilesPerDirectory: Int? = nil, includeRotated: Bool = false) -> [String] {
         let limit = maxFilesPerDirectory ?? configuration.maxFilesPerDirectory
         return discoverDirectories().flatMap { directory in
-            logFiles(in: directory, maxFiles: limit)
+            logFiles(in: directory, maxFiles: limit, includeRotated: includeRotated)
         }
     }
 
-    public func logFiles(in directory: String, maxFiles: Int = 40) -> [String] {
+    public func logFiles(in directory: String, maxFiles: Int = 40, includeRotated: Bool = false) -> [String] {
         guard let entries = try? fileManager.contentsOfDirectory(atPath: directory) else { return [] }
         return entries
             .map { "\(directory)/\($0)" }
@@ -74,6 +74,7 @@ public struct RoonLogDiscoverer {
                 guard isFile(path) else { return false }
                 let name = URL(fileURLWithPath: path).lastPathComponent.lowercased()
                 guard !name.hasPrefix("._") else { return false }
+                guard includeRotated || !Self.isRotatedLogArchive(name) else { return false }
                 let includes = configuration.fileNameIncludes
                 return includes.contains { name.contains($0.lowercased()) }
             }
@@ -82,6 +83,17 @@ public struct RoonLogDiscoverer {
             }
             .prefix(max(1, maxFiles))
             .map { $0 }
+    }
+
+    private static func isRotatedLogArchive(_ name: String) -> Bool {
+        let patterns = [
+            #"\.\d{1,4}\.(?:txt|log)$"#,
+            #"-\d{4}-\d{2}-\d{2}\.(?:txt|log)$"#,
+            #"\.\d{8}\.(?:txt|log)$"#
+        ]
+        return patterns.contains { pattern in
+            name.range(of: pattern, options: .regularExpression) != nil
+        }
     }
 
     private func isDirectory(_ path: String) -> Bool {

@@ -22,6 +22,7 @@ public final class RuntimeStore {
     private var processedLines = 0
     private var warningCount = 0
     private var criticalCount = 0
+    private let alertSnapshotWindow: TimeInterval = 12 * 60 * 60
 
     public init(configuration: AppConfiguration = .default) {
         self.configuration = configuration.normalized()
@@ -57,6 +58,8 @@ public final class RuntimeStore {
 
     public func setWatchedFiles(_ files: [String]) {
         lock.withLock {
+            let currentFileSet = Set(files)
+            sources = sources.filter { currentFileSet.contains($0.key) }
             for file in files {
                 let key = file
                 if sources[key] == nil {
@@ -203,8 +206,8 @@ public final class RuntimeStore {
                 memory: sortedMemory,
                 recentLogs: recentLogs.items.reversed(),
                 volumeBuckets: volumeBuckets(now: now),
-                timeline: timeline.items.reversed(),
-                alerts: alerts.items.reversed(),
+                timeline: Array(timeline.items.suffix(240).reversed()),
+                alerts: visibleAlerts(now: now),
                 playback: playback.items.reversed(),
                 counters: currentCounters()
             )
@@ -232,7 +235,7 @@ public final class RuntimeStore {
                 mode: mode,
                 healthScore: health.score,
                 health: health,
-                alerts: alerts.items.reversed(),
+                alerts: visibleAlerts(now: now),
                 counters: currentCounters()
             )
         }
@@ -249,6 +252,9 @@ public final class RuntimeStore {
 
     private func appendAlertIfNeeded(_ event: RuntimeEvent) {
         let now = Date()
+        guard event.time >= runStartedAt.addingTimeInterval(-60),
+              event.time >= now.addingTimeInterval(-alertSnapshotWindow)
+        else { return }
         let key = "\(event.type)|\(event.source)|\(event.message)"
         if let last = recentAlertKeys[key], now.timeIntervalSince(last) < configuration.alertDedupeSeconds {
             return
@@ -256,6 +262,16 @@ public final class RuntimeStore {
         recentAlertKeys[key] = now
         alerts.append(event)
         recentAlertKeys = recentAlertKeys.filter { now.timeIntervalSince($0.value) < 300 }
+    }
+
+    private func visibleAlerts(now: Date) -> [RuntimeEvent] {
+        let cutoff = max(
+            runStartedAt.addingTimeInterval(-60),
+            now.addingTimeInterval(-alertSnapshotWindow)
+        )
+        return alerts.items
+            .filter { $0.time >= cutoff }
+            .sorted { $0.time > $1.time }
     }
 
     private func appendHealthTrendIfNeeded(_ health: RoonHealth, now: Date) {

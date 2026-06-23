@@ -35,8 +35,9 @@ The watcher combines log-derived events with local system signals:
   `/Library`, and the configured `baseDirectory`.
 - Optional manual log directories and environment based paths:
   `ROON_LOG_DIR`, `ROONSERVER_LOG_DIR`, and `ROONSERVER_DATAROOT`.
-- Current and rotated log files matching `fileNameIncludes`, while AppleDouble
-  metadata files such as `._Package.swift` are ignored.
+- Current, non-rotated log files matching `fileNameIncludes`, while rotated
+  archives and AppleDouble metadata files such as `._Package.swift` are ignored
+  by the live tailer.
 - New log lines only; the tailer polls append-only changes instead of re-reading
   whole files on every refresh.
 - Roon memory lines: physical, managed, unmanaged and virtual memory, plus a
@@ -81,7 +82,7 @@ Default signal weights:
 | --- | --- | ---: |
 | Sources | no watched source | 28 |
 | Sources | only demo data | 16 |
-| Sources | only rotated/inactive logs | 20 |
+| Sources | only inactive/non-current logs | 20 |
 | Logs | no line processed yet | 24 |
 | Logs | stream stale warning / critical | 16 / 34 |
 | Events | critical log events in the event window | up to 42 |

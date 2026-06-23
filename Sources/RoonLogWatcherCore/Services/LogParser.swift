@@ -200,7 +200,8 @@ public struct LogParser {
     private func parseDatabase(line: String, lower: String, source: String, time: Date) -> [RuntimeEvent] {
         guard lower.contains("database")
             || lower.contains("sqlite")
-            || lower.contains("query")
+            || lower.contains("slow query")
+            || lower.contains("query took")
             || lower.contains("vacuum")
             || lower.contains("checkpoint")
         else { return [] }
@@ -428,7 +429,11 @@ public struct LogParser {
             "corruptfile",
             "failed to load device db",
             "scx: in onafterentry",
-            "scx: in onbeforeentry"
+            "scx: in onbeforeentry",
+            "scx: in onafterexit",
+            "failed to perform search for query",
+            "autodetect script failed",
+            "keynotfoundexception"
         ])
     }
 

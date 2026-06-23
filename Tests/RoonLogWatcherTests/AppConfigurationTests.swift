@@ -220,6 +220,29 @@ final class AppConfigurationTests: XCTestCase {
         XCTAssertEqual(discoverer.discoverLogFiles(), [logFile.path])
     }
 
+    func testDiscovererExcludesRotatedLogsFromLiveTailByDefault() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RoonLogWatcherRotatedLogs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let current = root.appendingPathComponent("RoonServer_log.txt")
+        let rotated = root.appendingPathComponent("RoonServer_log.06.txt")
+        try "06/23 18:00:00 Info: current\n".write(to: current, atomically: true, encoding: .utf8)
+        try "06/22 22:46:29 Critical: old archive line\n".write(to: rotated, atomically: true, encoding: .utf8)
+
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RoonLogWatcherRotatedConfig-\(UUID().uuidString).json")
+        let store = AppConfigStore(configURL: configURL)
+        var config = store.configuration
+        config.autoDiscoverRoonLogDirectories = false
+        config.logDirectories = [root.path]
+        try store.save(config)
+
+        let discoverer = RoonLogDiscoverer(configStore: store)
+
+        XCTAssertEqual(discoverer.discoverLogFiles(), [current.path])
+        XCTAssertEqual(Set(discoverer.discoverLogFiles(includeRotated: true)), Set([current.path, rotated.path]))
+    }
+
     private func http(_ request: URLRequest) async throws -> (data: Data, response: HTTPURLResponse) {
         var lastError: Error?
         for _ in 0..<20 {

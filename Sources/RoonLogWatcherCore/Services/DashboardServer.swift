@@ -126,7 +126,6 @@ public final class DashboardServer {
     private func snapshotJSON() -> String {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
         let data = (try? encoder.encode(store.snapshot())) ?? Data("{}".utf8)
         return String(data: data, encoding: .utf8) ?? "{}"
     }

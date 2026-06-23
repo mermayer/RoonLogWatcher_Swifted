@@ -111,7 +111,7 @@ struct RoonHealthEvaluator {
             domain: "source",
             severity: .info,
             title: "Log sources active",
-            message: "\(currentSources.count) current source(s) are being watched; \(inactiveArchiveCount) rotated or inactive file(s) are hidden from the main list.",
+            message: "\(currentSources.count) current source(s) are being watched; \(inactiveArchiveCount) inactive or non-current file(s) are ignored for live health.",
             impact: 0,
             count: currentSources.count
         ))

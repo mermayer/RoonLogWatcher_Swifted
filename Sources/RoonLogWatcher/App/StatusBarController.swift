@@ -106,6 +106,7 @@ final class StatusBarController {
                 )
             )
         } else if system.host.isRoonServerLikely {
+            store.setWatchedFiles([])
             demoFeed.stop()
             store.setMode(.idle)
             store.recordSystemMessage(
@@ -117,6 +118,7 @@ final class StatusBarController {
                 )
             )
         } else if configStore.configuration.enableDemoModeWhenNoLogs {
+            store.setWatchedFiles([])
             demoFeed.start()
             store.recordSystemMessage(
                 severity: .info,
@@ -127,6 +129,7 @@ final class StatusBarController {
                 )
             )
         } else {
+            store.setWatchedFiles([])
             store.setMode(.idle)
             store.recordSystemMessage(
                 severity: .warning,

@@ -149,9 +149,12 @@ final class LogParserTests: XCTestCase {
         let parser = LogParser()
         let lines = [
             "06/23 00:08:59 Critical: scx: in OnAfterEntry: System.IndexOutOfRangeException: Index was outside the bounds of the array.",
+            "06/22 22:46:29 Critical: scx: in OnAfterExit: System.ArgumentException: Destination array was not long enough.",
             "06/22 23:09:12 Warn: [zone MRIRR] Swim failed to start (Result[Status=NotFound]), bailing",
             "06/22 23:09:02 Warn: [swim] Failed to start persisted swim session: Result[Status=NotFound]",
-            "06/22 22:46:51 Warn: [storage] [directory] Failed to extract audio format from '/music/example.mp3': CorruptFile"
+            "06/22 22:46:51 Warn: [storage] [directory] Failed to extract audio format from '/music/example.mp3': CorruptFile",
+            "06/22 22:46:29 Warn: [devicedb] autodetect script failed: System.Collections.Generic.KeyNotFoundException",
+            "06/23 18:14:46 Critical: Failed to perform search for query Delerium, Sarah McLachlan, John Summit Silence.: System.Collections.Generic.KeyNotFoundException"
         ]
 
         for line in lines {
@@ -347,6 +350,33 @@ final class LogParserTests: XCTestCase {
         XCTAssertEqual(store.snapshot().alerts.count, 120)
     }
 
+    func testRuntimeStoreIgnoresAlertsOlderThanCurrentRun() {
+        let store = RuntimeStore()
+        let event = RuntimeEvent(
+            id: "old-alert",
+            time: Date().addingTimeInterval(-24 * 60 * 60),
+            domain: "server",
+            type: "server.critical.warning",
+            severity: .warning,
+            title: "Server critical log entry",
+            message: "old archive alert",
+            source: "RoonServer/RoonServer_log.06.txt",
+            valueMB: nil,
+            zone: nil
+        )
+
+        store.ingest(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.06.txt",
+            line: "old archive alert",
+            events: [event],
+            mode: .live
+        )
+
+        let snapshot = store.snapshot()
+        XCTAssertTrue(snapshot.alerts.isEmpty)
+        XCTAssertEqual(snapshot.counters.warningCount, 1)
+    }
+
     func testRuntimeSnapshotIncludesSystemStatusAndHealthTrend() {
         let store = RuntimeStore()
         let now = Date()
@@ -407,5 +437,21 @@ final class LogParserTests: XCTestCase {
 
         XCTAssertEqual(snapshot.counters.watchedFileCount, 4)
         XCTAssertEqual(sourceSignal?.count, 2)
+    }
+
+    func testRuntimeStoreRemovesSourcesNoLongerWatched() {
+        let store = RuntimeStore()
+        store.setWatchedFiles([
+            "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            "/tmp/RoonServer/Logs/RoonServer_log.06.txt"
+        ])
+        store.setWatchedFiles([
+            "/tmp/RoonServer/Logs/RoonServer_log.txt"
+        ])
+
+        let snapshot = store.snapshot()
+
+        XCTAssertEqual(snapshot.counters.watchedFileCount, 1)
+        XCTAssertEqual(snapshot.watchedSources.map(\.path), ["/tmp/RoonServer/Logs/RoonServer_log.txt"])
     }
 }
