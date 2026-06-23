@@ -91,12 +91,23 @@ public struct LogParser {
             || lower.contains("networkerror")
             || lower.contains("network error")
             || lower.contains("dropped")
-        if hasBuffering || hasPlaybackProblem {
+        if hasPlaybackProblem {
             events.append(event(
                 domain: "playback",
-                type: hasBuffering ? "playback.buffering" : "playback.warning.detected",
+                type: "playback.warning.detected",
+                severity: .warning,
+                title: "Playback issue",
+                message: trimmed(line),
+                source: source,
+                time: time,
+                zone: zone
+            ))
+        } else if hasBuffering {
+            events.append(event(
+                domain: "playback",
+                type: "playback.buffering",
                 severity: .info,
-                title: hasBuffering ? "Playback buffering observed" : "Playback issue observed",
+                title: "Playback buffering observed",
                 message: trimmed(line),
                 source: source,
                 time: time,
@@ -121,8 +132,8 @@ public struct LogParser {
         guard hasRaatContext else { return [] }
 
         let zone = extractZone(from: line)
-        if lower.contains("disconnect") || lower.contains("transport lost") || lower.contains("device lost") {
-            return [event(domain: "raat", type: "raat.disconnected", severity: .info, title: "RAAT disconnect observed", message: trimmed(line), source: source, time: time, zone: zone)]
+        if lower.contains("transport lost") || lower.contains("device lost") || lower.contains("disconnected") {
+            return [event(domain: "raat", type: "raat.disconnected", severity: .warning, title: "RAAT transport interruption", message: trimmed(line), source: source, time: time, zone: zone)]
         }
         if lower.contains("connected") || lower.contains("reconnect") {
             return [event(domain: "raat", type: "raat.connected", severity: .info, title: "RAAT connected", message: trimmed(line), source: source, time: time, zone: zone)]

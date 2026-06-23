@@ -67,6 +67,7 @@ enum DashboardAssets {
           <section class="center-pane">
             <div class="pane-header">
               <h2 data-i18n="section.liveLogStream">Live Log Stream</h2>
+              <div id="memoryTrendHeader" class="memory-trend-header empty"></div>
               <label class="toggle"><span class="toggle-label" data-i18n="label.autoScroll">Auto Scroll</span> <input id="autoScrollToggle" type="checkbox" checked><span class="toggle-control"></span></label>
             </div>
             <div class="log-toolbar">
@@ -977,10 +978,76 @@ enum DashboardAssets {
     }
 
     .pane-header {
+      display: grid;
+      grid-template-columns: max-content minmax(180px, 1fr) max-content;
       justify-content: space-between;
       gap: 16px;
       padding: 0 18px;
     }
+
+    .memory-trend-header {
+      min-width: 0;
+      max-width: 520px;
+      justify-self: stretch;
+      display: grid;
+      grid-template-columns: max-content minmax(90px, 1fr) max-content max-content;
+      align-items: center;
+      gap: 9px;
+      padding: 5px 10px;
+      border: 1px solid rgba(139, 152, 166, 0.24);
+      border-radius: 6px;
+      background: rgba(12, 17, 23, 0.72);
+      color: var(--muted);
+      overflow: hidden;
+    }
+
+    .memory-trend-header.empty {
+      opacity: 0.72;
+    }
+
+    .memory-trend-title {
+      color: #aeb8c4;
+      font-size: 11px;
+      font-weight: 760;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .memory-trend-bars {
+      --memory-bars: 24;
+      min-width: 0;
+      height: 20px;
+      display: grid;
+      grid-template-columns: repeat(var(--memory-bars), minmax(2px, 1fr));
+      align-items: end;
+      gap: 2px;
+    }
+
+    .memory-trend-bars span {
+      min-height: 3px;
+      height: calc(var(--h) * 1%);
+      border-radius: 2px 2px 0 0;
+      background: linear-gradient(180deg, #58b9ff, rgba(88, 185, 255, 0.36));
+    }
+
+    .memory-trend-value,
+    .memory-trend-delta {
+      font-size: 12px;
+      font-weight: 720;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .memory-trend-value {
+      color: #e7ecf2;
+    }
+
+    .memory-trend-delta {
+      color: var(--muted);
+    }
+
+    .memory-trend-header.rising .memory-trend-delta { color: var(--yellow); }
+    .memory-trend-header.falling .memory-trend-delta { color: var(--green); }
 
     .toggle {
       display: flex;
@@ -2014,6 +2081,22 @@ enum DashboardAssets {
         flex-wrap: wrap;
       }
 
+      .pane-header {
+        grid-template-columns: max-content minmax(140px, 1fr) max-content;
+        gap: 8px 12px;
+        padding: 8px 12px;
+      }
+
+      .memory-trend-header {
+        max-width: none;
+        grid-template-columns: max-content minmax(56px, 1fr) max-content;
+        gap: 7px;
+      }
+
+      .memory-trend-delta {
+        display: none;
+      }
+
       .log-toolbar {
         padding: 8px 12px;
       }
@@ -2124,6 +2207,16 @@ enum DashboardAssets {
         overflow-wrap: anywhere;
       }
     }
+
+    @media (max-width: 520px) {
+      .pane-header {
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+
+      .memory-trend-header {
+        grid-column: 1 / -1;
+      }
+    }
     """
 
     static let javascript = """
@@ -2232,6 +2325,9 @@ enum DashboardAssets {
         "chart.warning": "Warnings",
         "chart.error": "Errors",
         "chart.bucket": "bucket",
+        "memoryTrend.title": "24h Roon Memory",
+        "memoryTrend.noData": "Waiting for memory samples",
+        "memoryTrend.samples": "samples",
         "link.viewAllAlerts": "View all alerts...",
         "link.viewAllEvents": "View all events...",
         "settings.title": "Configuration",
@@ -2300,10 +2396,17 @@ enum DashboardAssets {
         "health.server.stopped": "Latest server state is stopped",
         "health.database.critical": "Database corruption risk",
         "health.database.warning": "Database warning activity",
-        "health.raat.unstable": "RAAT reconnect/disconnect activity",
+        "health.raat.unstable": "RAAT transport interruptions",
         "health.raat.disconnected": "Latest RAAT state disconnected",
-        "health.playback.unstable": "Playback buffering or timeout activity",
-        "health.memory.high": "Memory above or near threshold",
+        "health.playback.unstable": "Playback timeout or failure activity",
+        "health.memory.high": "Memory over threshold",
+        "health.memory.near_threshold": "Memory near threshold",
+        "health.memory.physical_high": "Physical memory over threshold",
+        "health.memory.physical_near_threshold": "Physical memory near threshold",
+        "health.memory.managed_high": "Managed memory over threshold",
+        "health.memory.managed_near_threshold": "Managed memory near threshold",
+        "health.memory.unmanaged_high": "Unmanaged memory over threshold",
+        "health.memory.unmanaged_near_threshold": "Unmanaged memory near threshold",
         "health.memory.growth": "Memory growth detected",
         "health.disk.ok": "Log volume has free space",
         "health.disk.low": "Log volume free space is low",
@@ -2422,6 +2525,9 @@ enum DashboardAssets {
         "chart.warning": "Warnungen",
         "chart.error": "Fehler",
         "chart.bucket": "Bucket",
+        "memoryTrend.title": "24h Roon-Speicher",
+        "memoryTrend.noData": "Warte auf Speicherwerte",
+        "memoryTrend.samples": "Proben",
         "link.viewAllAlerts": "Alle Warnungen anzeigen...",
         "link.viewAllEvents": "Alle Ereignisse anzeigen...",
         "settings.title": "Konfiguration",
@@ -2490,10 +2596,17 @@ enum DashboardAssets {
         "health.server.stopped": "Letzter Serverzustand ist gestoppt",
         "health.database.critical": "Datenbank-Korruptionsrisiko",
         "health.database.warning": "Datenbank-Warnaktivität",
-        "health.raat.unstable": "RAAT Reconnect-/Disconnect-Aktivität",
+        "health.raat.unstable": "RAAT-Transportunterbrechungen",
         "health.raat.disconnected": "Letzter RAAT-Zustand getrennt",
-        "health.playback.unstable": "Playback-Buffering oder Timeouts",
-        "health.memory.high": "Speicher nahe oder über Schwelle",
+        "health.playback.unstable": "Playback-Timeouts oder Fehler",
+        "health.memory.high": "Speicher über Schwelle",
+        "health.memory.near_threshold": "Speicher nahe Schwelle",
+        "health.memory.physical_high": "Physical Memory über Schwelle",
+        "health.memory.physical_near_threshold": "Physical Memory nahe Schwelle",
+        "health.memory.managed_high": "Managed Memory über Schwelle",
+        "health.memory.managed_near_threshold": "Managed Memory nahe Schwelle",
+        "health.memory.unmanaged_high": "Unmanaged Memory über Schwelle",
+        "health.memory.unmanaged_near_threshold": "Unmanaged Memory nahe Schwelle",
         "health.memory.growth": "Speicherwachstum erkannt",
         "health.disk.ok": "Log-Volume hat freien Platz",
         "health.disk.low": "Log-Volume wird knapp",
@@ -2865,10 +2978,8 @@ enum DashboardAssets {
       ['[data-i18n="section.runtimeHealth"]', "section.runtimeHealth"],
       ['[data-i18n="section.sources"]', "section.sources"],
       ['[data-i18n="section.memoryResources"]', "section.memoryResources"],
-      ['[data-i18n="section.liveLogStream"]', "section.liveLogStream"],
       ['[data-i18n="section.alerts"]', "section.alerts"],
       ['[data-i18n="section.playbackRaat"]', "section.playbackRaat"],
-      ['[data-i18n="label.autoScroll"]', "logs.autoScroll"],
       ["#pauseStream", "logs.pause"],
       ['[data-i18n="label.level"]', "logs.level"],
       ["#searchInput", "logs.search"],
@@ -3199,6 +3310,7 @@ enum DashboardAssets {
       renderRuntime(snapshot);
       renderSources(snapshot);
       renderResources(snapshot);
+      renderMemoryTrend(snapshot);
       const visibleLogCount = renderLogs(logs);
       renderAlerts(alerts);
       renderPlayback(playback);
@@ -3745,11 +3857,66 @@ enum DashboardAssets {
       `);
     }
 
+    function renderMemoryTrend(snapshot) {
+      const element = document.getElementById("memoryTrendHeader");
+      if (!element) return;
+      const points = (snapshot.memoryTrend24h || [])
+        .map(point => ({
+          ...point,
+          valueMB: Number(point.valueMB),
+          timestamp: new Date(point.time).getTime()
+        }))
+        .filter(point => Number.isFinite(point.valueMB) && Number.isFinite(point.timestamp))
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      if (!points.length) {
+        element.className = "memory-trend-header empty";
+        element.innerHTML = `
+          <span class="memory-trend-title">${escapeHTML(t("memoryTrend.title"))}</span>
+          <div class="memory-trend-bars" style="--memory-bars:12"></div>
+          <span class="memory-trend-value">${escapeHTML(t("memoryTrend.noData"))}</span>
+          <span class="memory-trend-delta">--</span>
+        `;
+        element.title = t("memoryTrend.noData");
+        return;
+      }
+
+      const first = points[0];
+      const last = points[points.length - 1];
+      const values = points.map(point => point.valueMB);
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = Math.max(1, max - min);
+      const delta = last.valueMB - first.valueMB;
+      const direction = delta > 50 ? "rising" : delta < -50 ? "falling" : "steady";
+      const bars = points.map(point => {
+        const height = Math.max(12, Math.round(((point.valueMB - min) / span) * 86 + 8));
+        const title = `${fmtTime(point.time)} · ${formatResource(point.valueMB, "MB")}`;
+        return `<span style="--h:${height}" title="${escapeHTML(title)}"></span>`;
+      }).join("");
+      const deltaLabel = formatSignedResource(delta, "MB");
+
+      element.className = `memory-trend-header ${direction}`;
+      element.title = `${t("memoryTrend.title")}: ${formatResource(last.valueMB, "MB")} · ${deltaLabel} · ${points.length} ${t("memoryTrend.samples")}`;
+      element.innerHTML = `
+        <span class="memory-trend-title">${escapeHTML(t("memoryTrend.title"))}</span>
+        <div class="memory-trend-bars" style="--memory-bars:${Math.max(1, points.length)}">${bars}</div>
+        <span class="memory-trend-value">${formatResource(last.valueMB, "MB")}</span>
+        <span class="memory-trend-delta">${deltaLabel}</span>
+      `;
+    }
+
     function formatResource(value, unit) {
       if (!unit) return new Intl.NumberFormat().format(value);
       if (unit === "%") return `${Number(value).toFixed(1)}%`;
       if (value >= 1024) return `${(value / 1024).toFixed(2)} GB`;
       return `${Math.round(value)} ${unit}`;
+    }
+
+    function formatSignedResource(value, unit) {
+      const number = Number(value || 0);
+      if (Math.abs(number) < 0.5) return `0 ${unit}`;
+      return `${number > 0 ? "+" : "-"}${formatResource(Math.abs(number), unit)}`;
     }
 
     function sparkBars(seed) {

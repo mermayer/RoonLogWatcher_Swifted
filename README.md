@@ -39,7 +39,8 @@ The watcher combines log-derived events with local system signals:
   metadata files such as `._Package.swift` are ignored.
 - New log lines only; the tailer polls append-only changes instead of re-reading
   whole files on every refresh.
-- Roon memory lines: physical, managed, unmanaged and virtual memory.
+- Roon memory lines: physical, managed, unmanaged and virtual memory, plus a
+  compact 24-hour Roon memory trend in the live-log header.
 - Playback activity and instability: playing, stopped, buffering, timeout,
   failed, dropped and network error style lines.
 - RAAT activity: connect, reconnect, disconnect, transport lost and device lost.
@@ -51,7 +52,8 @@ The watcher combines log-derived events with local system signals:
 - Local host status: likely Roon host detection, matching Roon processes, CPU,
   resident memory, optional open-file counts and log-volume free space.
 - Dashboard state: retained recent logs, exportable log history, deduplicated
-  alerts, playback/RAAT timeline, log-volume buckets and health trend samples.
+  alerts, playback/RAAT timeline, log-volume buckets, health trend samples and
+  24-hour memory trend samples.
 
 ## Roon Health Score
 
@@ -89,18 +91,18 @@ Default signal weights:
 | Server | retryable or generic exception warnings | up to 18 |
 | Database | corruption or malformed SQLite database | up to 42 |
 | Database | locked/busy/slow/failed database activity | up to 24 |
-| RAAT | disconnect burst warning / critical | 18 / 34 |
+| RAAT | visible transport interruption burst warning / critical | 18 / 34 |
 | RAAT | latest state disconnected | 12 |
-| Playback | buffering/timeout warnings | up to 24 |
+| Playback | timeout/failure warning burst | up to 24 |
 | Playback | heavy repeated playback instability | up to 32 |
-| Memory | near threshold / over threshold | 12 / 28 |
+| Memory | near threshold at 92% / over threshold | 12 / 28 |
 | Memory | growth over the configured window | 18 |
 | System | high Roon process CPU | 14 |
 | System | high Roon process memory | 14 |
 | Disk | low / critical free log-volume space | 14 / 34 |
 
 The important detail is that not every Roon `Error` text is treated as equally
-dangerous. A single playback buffer warning, image fetch retry or transient
+dangerous. A plain playback buffering line, image fetch retry or transient
 SQLite busy message should not collapse the score to zero. The evaluator looks at
 the parsed domain, severity, recency and repetition window before assigning
 impact.
@@ -111,12 +113,12 @@ The parser first tries to classify a line into a known domain. Domain-specific
 classification wins over plain text severity:
 
 - `info`: memory samples, file-cache status, normal playback activity, RAAT
-  reconnect/connect events, database maintenance and image fetch retries that
-  still have attempts left.
-- `warning`: playback buffering, timeout, failed, dropped or network-error
-  lines; RAAT disconnect/transport lost/device lost; server stopped; retryable
-  or generic exceptions; SQLite busy, locked database, slow query, timeout,
-  rollback and exhausted image fetch retries.
+  reconnect/connect events, plain buffering, database maintenance and image
+  fetch retries that still have attempts left.
+- `warning`: playback timeout, failed, dropped or network-error lines; RAAT
+  transport lost, device lost or disconnected lines; server stopped; retryable or
+  generic exceptions; SQLite busy, locked database, slow query, timeout, rollback
+  and exhausted image fetch retries.
 - `critical`: fatal, crash, panic, unhandled/uncaught exception, out-of-memory,
   segmentation fault, database corruption and malformed SQLite database image.
 
@@ -125,11 +127,12 @@ highlighted log event. Fallback weighting uses conservative keywords:
 `fatal`, `crash` and `corrupt` become critical; `warning`, `timeout`, `failed`
 and `disconnect` become warning; other highlighted lines remain informational.
 
-The health evaluator then applies windowed thresholds. For example, playback
-warnings are warning-level by default and become critical only after a much
-larger repeated burst. RAAT disconnects use warning and critical disconnect
-counts. Database corruption is immediately critical, while SQLite busy/locked
-activity is warning-level and capped.
+The health evaluator then applies windowed thresholds. Plain buffering and normal
+RAAT reconnect activity stay informational. Playback timeout/failure warnings are
+warning-level by default and become critical only after a much larger repeated
+burst. RAAT transport interruptions use warning and critical disconnect counts.
+Database corruption is immediately critical, while SQLite busy/locked activity is
+warning-level and capped.
 
 ## Configuration
 
@@ -176,6 +179,9 @@ The main health-rule defaults are:
 - process CPU warning: `80%`
 - process memory warning: `4096 MB`
 - health trend sample interval: `30s`
+- memory thresholds: physical `2500 MB`, managed `2000 MB`, unmanaged `1800 MB`
+- memory near-threshold warning: `92%` of the configured metric threshold
+- memory growth window / threshold: `30 min` / `200 MB`
 
 ## Run
 

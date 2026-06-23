@@ -162,7 +162,7 @@ public struct MemoryAlertConfiguration: Codable, Equatable {
         enabled: Bool = true,
         physicalMemoryMB: Double = 2500,
         unmanagedMemoryMB: Double = 1800,
-        managedMemoryMB: Double = 1200,
+        managedMemoryMB: Double = 2000,
         growthWindowMinutes: Double = 30,
         growthThresholdMB: Double = 200,
         minSamplesForGrowth: Int = 5

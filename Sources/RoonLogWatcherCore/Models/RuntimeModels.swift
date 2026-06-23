@@ -66,6 +66,7 @@ public struct RuntimeSnapshot: Codable {
     public var healthScore: Int
     public var health: RoonHealth
     public var healthTrend: [RoonHealthTrendPoint]
+    public var memoryTrend24h: [MemoryTrendPoint]
     public var system: LocalSystemStatus?
     public var watchedSources: [WatchedSource]
     public var memory: [MemoryMetric]
@@ -147,6 +148,14 @@ public struct RoonHealthTrendPoint: Codable, Identifiable {
     public var time: Date
     public var score: Int
     public var state: RoonHealthState
+}
+
+public struct MemoryTrendPoint: Codable, Identifiable {
+    public var id: String { "\(metric)-\(time.timeIntervalSince1970)" }
+    public var time: Date
+    public var metric: String
+    public var valueMB: Double
+    public var source: String
 }
 
 public struct LocalSystemStatus: Codable {

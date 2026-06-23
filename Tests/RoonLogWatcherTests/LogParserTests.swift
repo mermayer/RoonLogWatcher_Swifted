@@ -14,15 +14,82 @@ final class LogParserTests: XCTestCase {
         XCTAssertTrue(events.contains { $0.title == "Unmanaged Memory" && $0.valueMB == 461 })
     }
 
-    func testParsesPlaybackBufferingAsNoticeWithZone() {
+    func testMemoryTrendFallsBackToPhysicalMemoryLogMetric() {
+        let parser = LogParser()
+        let store = RuntimeStore()
+        let line = "Info: [stats] 845 MB Physical 384 MB Managed 461 MB estimated Unmanaged 1280 MB Virtual"
+
+        store.ingest(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: line,
+            events: parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line),
+            mode: .live
+        )
+
+        let trend = store.snapshot().memoryTrend24h
+        XCTAssertEqual(trend.count, 1)
+        XCTAssertEqual(trend.first?.metric, "Physical Memory")
+        XCTAssertEqual(trend.first?.valueMB, 845)
+    }
+
+    func testManagedMemoryBelowNinetyTwoPercentDoesNotWarn() {
+        let parser = LogParser()
+        var configuration = AppConfiguration.default
+        configuration.memoryAlerts.managedMemoryMB = 1200
+        let store = RuntimeStore(configuration: configuration)
+        let line = "Info: [stats] 1088 MB Managed"
+
+        store.ingest(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: line,
+            events: parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line),
+            mode: .live
+        )
+
+        let snapshot = store.snapshot()
+        XCTAssertFalse(snapshot.health.signals.contains { $0.domain == "memory" && $0.severity != .info })
+        XCTAssertEqual(snapshot.health.score, 100)
+    }
+
+    func testManagedMemoryNearThresholdUsesSpecificSignal() {
+        let parser = LogParser()
+        var configuration = AppConfiguration.default
+        configuration.memoryAlerts.managedMemoryMB = 1200
+        let store = RuntimeStore(configuration: configuration)
+        let line = "Info: [stats] 1105 MB Managed"
+
+        store.ingest(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: line,
+            events: parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line),
+            mode: .live
+        )
+
+        let signal = store.snapshot().health.signals.first { $0.id == "memory.managed_near_threshold" }
+        XCTAssertEqual(signal?.severity, .warning)
+        XCTAssertEqual(signal?.valueMB, 1105)
+        XCTAssertEqual(signal?.thresholdMB, 1200)
+    }
+
+    func testParsesPlainPlaybackBufferingAsNoticeWithZone() {
+        let parser = LogParser()
+        let events = parser.parse(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: "06/22 17:03:24 Trace: [zone Living Room] state changed: Prepared => Buffering"
+        )
+
+        XCTAssertTrue(events.contains { $0.type == "playback.buffering" && $0.zone == "Living Room" && $0.severity == .info })
+        XCTAssertFalse(events.contains { $0.domain == "playback" && $0.severity != .info })
+    }
+
+    func testParsesPlaybackTimeoutAsVisibleWarning() {
         let parser = LogParser()
         let events = parser.parse(
             file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
             line: "06/22 17:03:24 Warn: [zone Living Room] state changed: Prepared => Buffering timeout"
         )
 
-        XCTAssertTrue(events.contains { $0.type == "playback.buffering" && $0.zone == "Living Room" && $0.severity == .info })
-        XCTAssertFalse(events.contains { $0.domain == "playback" && $0.severity != .info })
+        XCTAssertTrue(events.contains { $0.type == "playback.warning.detected" && $0.zone == "Living Room" && $0.severity == .warning })
     }
 
     func testParsesDatabaseLockAsTransientNotice() {
@@ -168,7 +235,27 @@ final class LogParserTests: XCTestCase {
         XCTAssertTrue(snapshot.health.signals.contains { $0.id == "database.critical" })
     }
 
-    func testPlaybackBufferingBurstDoesNotZeroHealthScore() {
+    func testPlainPlaybackBufferingBurstDoesNotAffectHealthScore() {
+        let parser = LogParser()
+        let store = RuntimeStore()
+
+        for index in 0..<6 {
+            let line = "Trace: [zone Living Room] state changed: Prepared => Buffering \(index)"
+            store.ingest(
+                file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+                line: line,
+                events: parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line),
+                mode: .live
+            )
+        }
+
+        let snapshot = store.snapshot()
+
+        XCTAssertFalse(snapshot.health.signals.contains { $0.id == "playback.unstable" })
+        XCTAssertEqual(snapshot.counters.warningCount, 0)
+    }
+
+    func testPlaybackTimeoutBurstCreatesVisibleHealthWarning() {
         let parser = LogParser()
         let store = RuntimeStore()
 
@@ -189,7 +276,7 @@ final class LogParserTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(snapshot.health.score, 70)
         XCTAssertEqual(playbackSignal?.severity, .warning)
         XCTAssertEqual(playbackSignal?.count, 6)
-        XCTAssertEqual(snapshot.counters.warningCount, 0)
+        XCTAssertEqual(snapshot.counters.warningCount, 6)
     }
 
     func testSingleRaatDisconnectDoesNotCreateHealthWarning() {
@@ -208,6 +295,7 @@ final class LogParserTests: XCTestCase {
 
         XCTAssertFalse(snapshot.health.signals.contains { $0.id == "raat.unstable" || $0.id == "raat.disconnected" })
         XCTAssertEqual(snapshot.counters.warningCount, 0)
+        XCTAssertFalse(snapshot.playback.contains { $0.type == "raat.disconnected" })
     }
 
     func testRaatDisconnectBurstEscalatesHealth() {
@@ -229,7 +317,7 @@ final class LogParserTests: XCTestCase {
 
         XCTAssertEqual(raatSignal?.severity, .warning)
         XCTAssertEqual(raatSignal?.count, 2)
-        XCTAssertEqual(snapshot.counters.warningCount, 0)
+        XCTAssertEqual(snapshot.counters.warningCount, 2)
     }
 
     func testRuntimeStoreRetainsMoreThanEightyAlerts() {
@@ -300,6 +388,8 @@ final class LogParserTests: XCTestCase {
         XCTAssertTrue(snapshot.system?.host.isRoonServerLikely == true)
         XCTAssertEqual(snapshot.system?.processes.first?.name, "RoonServer")
         XCTAssertFalse(snapshot.healthTrend.isEmpty)
+        XCTAssertEqual(snapshot.memoryTrend24h.first?.metric, "Roon Process Memory")
+        XCTAssertEqual(snapshot.memoryTrend24h.first?.valueMB, 512)
         XCTAssertTrue(snapshot.health.signals.contains { $0.id == "system.host.detected" })
     }
 

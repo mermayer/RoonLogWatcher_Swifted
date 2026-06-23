@@ -2,6 +2,7 @@ import Foundation
 
 struct RoonHealthEvaluator {
     var configuration: AppConfiguration
+    private let memoryNearThresholdRatio = 0.92
 
     func evaluate(
         now: Date,
@@ -314,7 +315,7 @@ struct RoonHealthEvaluator {
 
     private func evaluateRaat(now: Date, events: [RuntimeEvent], rules: HealthRuleConfiguration, into signals: inout [RoonHealthSignal]) {
         let recentRaat = recentEvents(now: now, events: events, minutes: rules.raatWindowMinutes).filter { $0.domain == "raat" }
-        let disconnects = recentRaat.filter { $0.type == "raat.disconnected" }
+        let disconnects = recentRaat.filter { $0.type == "raat.disconnected" && $0.severity == .warning }
 
         if disconnects.count >= rules.raatCriticalDisconnects {
             signals.append(signal(
@@ -334,8 +335,8 @@ struct RoonHealthEvaluator {
                 id: "raat.unstable",
                 domain: "raat",
                 severity: .warning,
-                title: "RAAT reconnect activity",
-                message: "\(disconnects.count) disconnect event(s) in the configured window.",
+                title: "RAAT transport interruptions",
+                message: "\(disconnects.count) visible RAAT transport warning(s) in the configured window.",
                 impact: 18,
                 observedAt: disconnects.map(\.time).max(),
                 count: disconnects.count,
@@ -347,7 +348,7 @@ struct RoonHealthEvaluator {
 
     private func evaluatePlayback(now: Date, events: [RuntimeEvent], rules: HealthRuleConfiguration, into signals: inout [RoonHealthSignal]) {
         let recentPlayback = recentEvents(now: now, events: events, minutes: rules.playbackWindowMinutes).filter {
-            $0.domain == "playback" && ($0.type == "playback.buffering" || $0.type == "playback.warning.detected")
+            $0.domain == "playback" && $0.type == "playback.warning.detected" && $0.severity == .warning
         }
         guard recentPlayback.count >= rules.playbackCriticalCount else { return }
         let criticalThreshold = max(rules.playbackCriticalCount * 3, rules.playbackCriticalCount + 1)
@@ -358,7 +359,7 @@ struct RoonHealthEvaluator {
             domain: "playback",
             severity: isCritical ? .critical : .warning,
             title: "Playback instability",
-            message: "\(recentPlayback.count) playback buffering or retry event(s) in the configured window.",
+            message: "\(recentPlayback.count) visible playback timeout or failure warning(s) in the configured window.",
             impact: impact,
             observedAt: recentPlayback.map(\.time).max(),
             count: recentPlayback.count,
@@ -382,12 +383,13 @@ struct RoonHealthEvaluator {
 
         for metric in memory {
             guard let threshold = thresholds[metric.metric] else { continue }
+            let signalIDs = memorySignalIDs(for: metric.metric)
             if metric.valueMB >= threshold {
                 signals.append(signal(
-                    id: "memory.high",
+                    id: signalIDs.high,
                     domain: "memory",
                     severity: .critical,
-                    title: "High memory usage",
+                    title: "\(metric.metric) over threshold",
                     message: "\(metric.metric) is above the configured threshold.",
                     impact: 28,
                     observedAt: metric.updatedAt,
@@ -395,13 +397,13 @@ struct RoonHealthEvaluator {
                     thresholdMB: threshold,
                     source: metric.source
                 ))
-            } else if metric.valueMB >= threshold * 0.82 {
+            } else if metric.valueMB >= threshold * memoryNearThresholdRatio {
                 signals.append(signal(
-                    id: "memory.high",
+                    id: signalIDs.near,
                     domain: "memory",
                     severity: .warning,
-                    title: "Memory nearing threshold",
-                    message: "\(metric.metric) is nearing the configured threshold.",
+                    title: "\(metric.metric) near threshold",
+                    message: "\(metric.metric) is within \(Int(((1 - memoryNearThresholdRatio) * 100).rounded()))% of the configured threshold.",
                     impact: 12,
                     observedAt: metric.updatedAt,
                     valueMB: metric.valueMB,
@@ -436,6 +438,19 @@ struct RoonHealthEvaluator {
                     source: last.source
                 ))
             }
+        }
+    }
+
+    private func memorySignalIDs(for metric: String) -> (high: String, near: String) {
+        switch metric {
+        case "Physical Memory":
+            return ("memory.physical_high", "memory.physical_near_threshold")
+        case "Managed Memory":
+            return ("memory.managed_high", "memory.managed_near_threshold")
+        case "Unmanaged Memory":
+            return ("memory.unmanaged_high", "memory.unmanaged_near_threshold")
+        default:
+            return ("memory.high", "memory.near_threshold")
         }
     }
 

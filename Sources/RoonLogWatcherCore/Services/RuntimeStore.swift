@@ -13,7 +13,8 @@ public final class RuntimeStore {
     private var alerts = BoundedArray<RuntimeEvent>(limit: 500)
     private var playback = BoundedArray<RuntimeEvent>(limit: 240)
     private var memoryByMetric: [String: MemoryMetric] = [:]
-    private var memoryHistory = BoundedArray<MemoryMetric>(limit: 600)
+    private var memoryHistory = BoundedArray<MemoryMetric>(limit: 5_760)
+    private var processMemoryHistory = BoundedArray<MemoryTrendPoint>(limit: 2_880)
     private var sources: [String: WatchedSource] = [:]
     private var systemStatus: LocalSystemStatus?
     private var healthTrend = BoundedArray<RoonHealthTrendPoint>(limit: 2_880)
@@ -43,6 +44,14 @@ public final class RuntimeStore {
     public func updateSystemStatus(_ status: LocalSystemStatus) {
         lock.withLock {
             systemStatus = status
+            if status.totalMemoryMB > 0 {
+                processMemoryHistory.append(MemoryTrendPoint(
+                    time: status.sampledAt,
+                    metric: "Roon Process Memory",
+                    valueMB: status.totalMemoryMB,
+                    source: "macOS process sampler"
+                ))
+            }
         }
     }
 
@@ -188,6 +197,7 @@ public final class RuntimeStore {
                 healthScore: health.score,
                 health: health,
                 healthTrend: healthTrend.items,
+                memoryTrend24h: memoryTrend24h(now: now),
                 system: systemStatus,
                 watchedSources: sortedSources,
                 memory: sortedMemory,
@@ -307,6 +317,37 @@ public final class RuntimeStore {
             }
         }
         return buckets
+    }
+
+    private func memoryTrend24h(now: Date, bucketCount: Int = 48) -> [MemoryTrendPoint] {
+        let start = now.addingTimeInterval(-24 * 60 * 60)
+        let processSamples = processMemoryHistory.items
+            .filter { $0.time >= start && $0.time <= now }
+            .sorted { $0.time < $1.time }
+        let physicalSamples = memoryHistory.items
+            .filter { $0.metric == "Physical Memory" && $0.updatedAt >= start && $0.updatedAt <= now }
+            .sorted { $0.updatedAt < $1.updatedAt }
+            .map {
+                MemoryTrendPoint(
+                    time: $0.updatedAt,
+                    metric: $0.metric,
+                    valueMB: $0.valueMB,
+                    source: $0.source
+                )
+            }
+        let samples = processSamples.isEmpty ? physicalSamples : processSamples
+        guard samples.count > bucketCount else { return samples }
+
+        let bucketSeconds = now.timeIntervalSince(start) / Double(max(1, bucketCount))
+        var buckets = Array<MemoryTrendPoint?>(repeating: nil, count: max(1, bucketCount))
+        for sample in samples {
+            let index = min(
+                buckets.count - 1,
+                max(0, Int(sample.time.timeIntervalSince(start) / bucketSeconds))
+            )
+            buckets[index] = sample
+        }
+        return buckets.compactMap { $0 }
     }
 
     private func sourceMetadata(
