@@ -94,6 +94,30 @@ final class LogParserTests: XCTestCase {
         XCTAssertEqual(trend.last?.valueMB, 1_059)
     }
 
+    func testMemoryTrendRetainsMoreThanSixHoursWhenFullStatsLinesArrive() {
+        let store = RuntimeStore()
+        let now = Date().addingTimeInterval(-5)
+        let firstSample = now.addingTimeInterval(-7 * 60 * 60)
+
+        for index in 0...1_680 {
+            let time = firstSample.addingTimeInterval(TimeInterval(index * 15))
+            store.ingest(
+                file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+                line: "stats \(index)",
+                events: memoryStatsEvents(time: time, physicalMB: Double(1_000 + index)),
+                mode: .live
+            )
+        }
+
+        let trend = store.snapshot().memoryTrend24h
+        let coveredSeconds = trend.last?.time.timeIntervalSince(trend.first?.time ?? Date()) ?? 0
+
+        XCTAssertEqual(trend.count, 48)
+        XCTAssertGreaterThan(coveredSeconds, 6.75 * 60 * 60)
+        XCTAssertEqual(trend.first?.metric, "Physical Memory")
+        XCTAssertEqual(trend.last?.metric, "Physical Memory")
+    }
+
     func testManagedMemoryBelowNinetyTwoPercentDoesNotWarn() {
         let parser = LogParser()
         var configuration = AppConfiguration.default
@@ -517,15 +541,50 @@ final class LogParserTests: XCTestCase {
         XCTAssertEqual(snapshot.watchedSources.map(\.path), ["/tmp/RoonServer/Logs/RoonServer_log.txt"])
     }
 
+    func testLocalSystemSamplerDetectsRoonProcessesFromCommandListing() {
+        let listing = """
+        44252 0.6 72800 /Users/joemac/Documents/Codex_Projects/RoonLogWatcher/dist/RoonLogWatcher.app/Contents/MacOS/RoonLogWatcher
+        49889 0.0 56912 /Applications/Roon.app/Contents/MacOS/RAATServer
+        49890 0.1 94256 /Applications/Roon.app/Contents/Resources/../RoonServer.app/Contents/MacOS/RoonServer
+        49898 1.4 2153360 /Applications/Roon.app/Contents/RoonServer.app/Contents/RoonAppliance.app/Contents/MacOS/RoonAppliance
+        49900 0.0 592 /Applications/Roon.app/Contents/RoonServer.app/Contents/MonoBundle/processreaper 49898
+        """
+        let sampler = LocalSystemSampler(
+            processListingProvider: { listing },
+            openFileCountProvider: { pid in pid == 49898 ? 123 : 7 }
+        )
+
+        let status = sampler.sample(discoverer: RoonLogDiscoverer(environment: [:]), includeOpenFiles: true)
+
+        XCTAssertEqual(status.processes.map(\.name), ["RAATServer", "RoonServer", "RoonAppliance"])
+        XCTAssertEqual(status.totalCPUPercent, 1.5, accuracy: 0.01)
+        XCTAssertEqual(status.totalMemoryMB, Double(56912 + 94256 + 2153360) / 1024, accuracy: 0.01)
+        XCTAssertEqual(status.openFileCount, 137)
+        XCTAssertFalse(status.processes.contains { $0.name == "RoonLogWatcher" || $0.path.contains("processreaper") })
+    }
+
     private func memoryEvent(time: Date, valueMB: Double) -> RuntimeEvent {
+        memoryMetricEvent(title: "Physical Memory", time: time, valueMB: valueMB)
+    }
+
+    private func memoryStatsEvents(time: Date, physicalMB: Double) -> [RuntimeEvent] {
+        [
+            memoryMetricEvent(title: "Virtual Memory", time: time, valueMB: physicalMB + 420_000),
+            memoryMetricEvent(title: "Physical Memory", time: time, valueMB: physicalMB),
+            memoryMetricEvent(title: "Managed Memory", time: time, valueMB: max(0, physicalMB - 600)),
+            memoryMetricEvent(title: "Unmanaged Memory", time: time, valueMB: 600)
+        ]
+    }
+
+    private func memoryMetricEvent(title: String, time: Date, valueMB: Double) -> RuntimeEvent {
         RuntimeEvent(
             id: UUID().uuidString,
             time: time,
             domain: "memory",
             type: "memory.sample.detected",
             severity: .info,
-            title: "Physical Memory",
-            message: "Physical Memory: \(Int(valueMB)) MB",
+            title: title,
+            message: "\(title): \(Int(valueMB)) MB",
             source: "RoonServer/RoonServer_log.txt",
             valueMB: valueMB,
             zone: nil

@@ -51,7 +51,9 @@ The watcher combines log-derived events with local system signals:
 - Database signals: corruption, malformed SQLite image, locked database,
   SQLite busy, slow query, timeout, rollback and maintenance completion.
 - Local host status: likely Roon host detection, matching Roon processes, CPU,
-  resident memory, optional open-file counts and log-volume free space.
+  resident memory, optional open-file counts and log-volume free space. Values
+  macOS does not expose are shown as `--`; per-process I/O wait is not sampled
+  yet.
 - Dashboard state: retained recent logs, exportable log history, deduplicated
   alerts, playback/RAAT timeline, log-volume buckets, health trend samples and
   24-hour memory trend samples.

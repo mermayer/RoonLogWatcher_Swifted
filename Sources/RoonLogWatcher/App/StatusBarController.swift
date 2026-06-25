@@ -213,8 +213,11 @@ final class StatusBarController {
         if !force, now.timeIntervalSince(lastSystemSampleAt) < systemSampleInterval, let current = lastSystemStatus {
             return current
         }
-        let includeOpenFiles = now.timeIntervalSince(lastOpenFileSampleAt) >= openFileSampleInterval
-        let status = systemSampler.sample(discoverer: discoverer, includeOpenFiles: includeOpenFiles)
+        let includeOpenFiles = force || now.timeIntervalSince(lastOpenFileSampleAt) >= openFileSampleInterval
+        var status = systemSampler.sample(discoverer: discoverer, includeOpenFiles: includeOpenFiles)
+        if !includeOpenFiles {
+            status = status.preservingOpenFiles(from: lastSystemStatus)
+        }
         store.updateSystemStatus(status)
         lastSystemSampleAt = now
         if includeOpenFiles {
@@ -340,6 +343,23 @@ final class StatusBarController {
         case .unknown:
             return menuText(en: "Unknown", de: "Unbekannt")
         }
+    }
+}
+
+private extension LocalSystemStatus {
+    func preservingOpenFiles(from previous: LocalSystemStatus?) -> LocalSystemStatus {
+        guard let previous, openFileCount == nil else { return self }
+        var copy = self
+        let previousByPID = Dictionary(uniqueKeysWithValues: previous.processes.map { ($0.pid, $0.openFiles) })
+        copy.processes = processes.map { process in
+            var processCopy = process
+            processCopy.openFiles = previousByPID[process.pid] ?? nil
+            return processCopy
+        }
+
+        let samples = copy.processes.compactMap(\.openFiles)
+        copy.openFileCount = samples.isEmpty ? previous.openFileCount : samples.reduce(0, +)
+        return copy
     }
 }
 

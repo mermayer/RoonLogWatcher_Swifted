@@ -934,6 +934,10 @@ enum DashboardAssets {
       background: linear-gradient(90deg, var(--green), #7fe895);
     }
 
+    .bar-track.empty .bar-fill {
+      width: 0;
+    }
+
     .spark {
       width: 82px;
       height: 18px;
@@ -2715,8 +2719,8 @@ enum DashboardAssets {
         "resource.managed": "Managed runtime memory reported by Roon logs, usually related to .NET/Mono managed allocations.",
         "resource.unmanaged": "Native or unmanaged memory reported by Roon logs. Growth here can indicate native buffers or cache pressure.",
         "resource.cpu": "Current Roon-related process CPU percentage from macOS sampling. It is intentionally sampled slowly to reduce background overhead.",
-        "resource.ioWait": "Lightweight placeholder for I/O wait pressure until real per-process I/O sampling is added. Treat trends here as contextual only.",
-        "resource.openFiles": "Open file descriptors for detected Roon processes. This uses a more expensive system call and is sampled infrequently.",
+        "resource.ioWait": "Per-process I/O wait is not sampled yet. The dashboard shows -- instead of a synthetic value.",
+        "resource.openFiles": "Open file descriptors for detected Roon processes. macOS may hide this value for other apps; unavailable samples are shown as --.",
         "resource.percent": "Relative bar value for quick scanning. Thresholds are conservative visual guides, not hard Roon limits.",
         "logs.autoScroll": "When enabled, the stream stays pinned to the newest log line. Turn it off to inspect older rows without the view jumping.",
         "logs.pause": "Pauses visual updates in the browser. The background watcher continues to read and classify logs.",
@@ -2767,7 +2771,7 @@ enum DashboardAssets {
         "source.path": "Full path to the watched log file.",
         "source.status": "Current watcher status for this file. Rotated archive files are excluded from live watching.",
         "health.detail.signal": "Individual signal that contributed to the health score, including severity, count, source or threshold where available.",
-        "health.detail.systemRow": "A local system value sampled from macOS. Some fields may show -- when unavailable or intentionally skipped for efficiency."
+        "health.detail.systemRow": "A local system value sampled from macOS. Some fields may show -- when unavailable, denied by macOS privacy rules, or intentionally skipped for efficiency."
       },
       de: {
         "common.iconLabel": "Hilfe",
@@ -2802,8 +2806,8 @@ enum DashboardAssets {
         "resource.managed": "Managed Runtime Memory aus Roon-Logs, typischerweise .NET/Mono-verwaltete Allokationen.",
         "resource.unmanaged": "Nativer oder unmanaged Speicher aus Roon-Logs. Wachstum kann auf native Puffer oder Cache-Druck hinweisen.",
         "resource.cpu": "Aktuelle CPU-Prozentwerte erkannter Roon-Prozesse aus macOS-Proben. Wird bewusst langsam abgefragt, um Ressourcen zu sparen.",
-        "resource.ioWait": "Leichter Platzhalter für I/O-Druck, bis echte prozessbezogene I/O-Proben ergänzt sind. Trends hier nur als Kontext verstehen.",
-        "resource.openFiles": "Offene Dateideskriptoren erkannter Roon-Prozesse. Diese teurere Systemabfrage läuft nur gelegentlich.",
+        "resource.ioWait": "Prozessbezogene I/O-Wartezeit wird noch nicht gemessen. Das Dashboard zeigt -- statt eines künstlichen Werts.",
+        "resource.openFiles": "Offene Dateideskriptoren erkannter Roon-Prozesse. macOS kann diesen Wert für andere Apps verbergen; nicht verfügbare Proben erscheinen als --.",
         "resource.percent": "Relative Balkenanzeige zum schnellen Scannen. Die Schwellen sind visuelle Orientierung, keine harten Roon-Grenzen.",
         "logs.autoScroll": "Wenn aktiv, bleibt der Stream bei der neuesten Logzeile. Ausschalten, um ältere Zeilen zu prüfen, ohne dass die Ansicht springt.",
         "logs.pause": "Pausiert nur die sichtbaren Updates im Browser. Der Hintergrund-Watcher liest und klassifiziert weiter.",
@@ -2854,7 +2858,7 @@ enum DashboardAssets {
         "source.path": "Vollständiger Pfad zur überwachten Logdatei.",
         "source.status": "Aktueller Watcher-Status dieser Datei. Rotierte Archivdateien werden nicht live überwacht.",
         "health.detail.signal": "Einzelnes Signal, das zum Health-Score beiträgt, inklusive Schweregrad, Anzahl, Quelle oder Schwelle, wenn verfügbar.",
-        "health.detail.systemRow": "Lokaler Systemwert aus macOS. Manche Felder zeigen --, wenn sie nicht verfügbar sind oder aus Effizienzgründen übersprungen werden."
+        "health.detail.systemRow": "Lokaler Systemwert aus macOS. Manche Felder zeigen --, wenn sie nicht verfügbar sind, von macOS-Datenschutzregeln verweigert oder aus Effizienzgründen übersprungen werden."
       }
     };
 
@@ -3839,21 +3843,26 @@ enum DashboardAssets {
       const virtual = byMetric["Virtual Memory"]?.valueMB || 0;
       const managed = byMetric["Managed Memory"]?.valueMB || 0;
       const unmanaged = byMetric["Unmanaged Memory"]?.valueMB || 0;
+      const system = snapshot.system || {};
+      const cpu = Number(system.totalCPUPercent);
+      const openFiles = Number(system.openFileCount);
+      const hasCPU = Number.isFinite(cpu) && (system.sampledAt || (system.processes || []).length);
+      const hasOpenFiles = Number.isFinite(openFiles);
       const rows = [
-        [t("rssMemory"), physical, "MB", Math.min(92, physical / 16), false, "resource.rss"],
-        [t("virtualMemory"), virtual, "MB", Math.min(92, virtual / 24), false, "resource.virtual"],
-        [t("managedMemory"), managed, "MB", Math.min(92, managed / 12), false, "resource.managed"],
-        [t("unmanaged"), unmanaged, "MB", Math.min(92, unmanaged / 14), false, "resource.unmanaged"],
-        [t("cpuUsage"), 18.6, "%", 42, true, "resource.cpu"],
-        [t("ioWait"), 2.1, "%", 18, true, "resource.ioWait"],
-        [t("openFiles"), 1243, "", 55, true, "resource.openFiles"]
+        { label: t("rssMemory"), value: physical, unit: "MB", percent: Math.min(92, physical / 16), helpKey: "resource.rss" },
+        { label: t("virtualMemory"), value: virtual, unit: "MB", percent: Math.min(92, virtual / 24), helpKey: "resource.virtual" },
+        { label: t("managedMemory"), value: managed, unit: "MB", percent: Math.min(92, managed / 12), helpKey: "resource.managed" },
+        { label: t("unmanaged"), value: unmanaged, unit: "MB", percent: Math.min(92, unmanaged / 14), helpKey: "resource.unmanaged" },
+        { label: t("cpuUsage"), value: hasCPU ? cpu : null, unit: "%", percent: hasCPU ? Math.min(100, cpu) : null, helpKey: "resource.cpu" },
+        { label: t("ioWait"), value: null, unit: "%", percent: null, helpKey: "resource.ioWait" },
+        { label: t("openFiles"), value: hasOpenFiles ? openFiles : null, unit: "", percent: hasOpenFiles ? Math.min(100, openFiles / 25) : null, helpKey: "resource.openFiles" }
       ];
       renderList("resourceList", rows, row => `
         <div class="resource-row">
-          <span class="row-title label-with-help"><span class="help-label-text">${escapeHTML(row[0])}</span>${help(row[5], "tooltip-left")}</span>
-          <span class="row-value value-with-help">${formatResource(row[1], row[2])}${help(row[5])}</span>
-          <span class="row-value value-with-help">${Math.round(row[3])}%${help("resource.percent")}</span>
-          ${row[4] ? `<div class="spark">${sparkBars(row[0])}</div>` : `<div class="bar-track"><div class="bar-fill" style="--value:${Math.round(row[3])}%"></div></div>`}
+          <span class="row-title label-with-help"><span class="help-label-text">${escapeHTML(row.label)}</span>${help(row.helpKey, "tooltip-left")}</span>
+          <span class="row-value value-with-help">${formatOptionalResource(row.value, row.unit)}${help(row.helpKey)}</span>
+          <span class="row-value value-with-help">${formatOptionalPercent(row.percent)}${help("resource.percent")}</span>
+          <div class="bar-track ${Number.isFinite(Number(row.percent)) ? "" : "empty"}"><div class="bar-fill" style="--value:${formatBarPercent(row.percent)}"></div></div>
         </div>
       `);
     }
@@ -3912,6 +3921,22 @@ enum DashboardAssets {
       if (unit === "%") return `${Number(value).toFixed(1)}%`;
       if (value >= 1024) return `${(value / 1024).toFixed(2)} GB`;
       return `${Math.round(value)} ${unit}`;
+    }
+
+    function formatOptionalResource(value, unit) {
+      const number = Number(value);
+      return Number.isFinite(number) ? formatResource(number, unit) : "--";
+    }
+
+    function formatOptionalPercent(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? `${Math.round(number)}%` : "--";
+    }
+
+    function formatBarPercent(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "0%";
+      return `${Math.max(0, Math.min(100, Math.round(number)))}%`;
     }
 
     function formatSignedResource(value, unit) {

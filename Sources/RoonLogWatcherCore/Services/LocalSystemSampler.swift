@@ -1,15 +1,26 @@
+import Darwin
 import Foundation
 
 public struct LocalSystemSampler {
     private let fileManager: FileManager
     private let processNames: Set<String>
+    private let processListingProvider: () -> String
+    private let openFileCountProvider: (Int) -> Int?
 
     public init(
         fileManager: FileManager = .default,
-        processNames: Set<String> = ["RoonServer", "RAATServer", "RoonAppliance", "Roon", "RoonBridge"]
+        processNames: Set<String> = ["RoonServer", "RAATServer", "RoonAppliance", "Roon", "RoonBridge"],
+        processListingProvider: (() -> String)? = nil,
+        openFileCountProvider: ((Int) -> Int?)? = nil
     ) {
         self.fileManager = fileManager
         self.processNames = processNames
+        self.processListingProvider = processListingProvider ?? {
+            Self.roonProcessListing(processNames: processNames)
+        }
+        self.openFileCountProvider = openFileCountProvider ?? { pid in
+            Self.openFileCount(pid: pid)
+        }
     }
 
     public func sample(discoverer: RoonLogDiscoverer, includeOpenFiles: Bool = false) -> LocalSystemStatus {
@@ -58,44 +69,102 @@ public struct LocalSystemSampler {
     }
 
     private func roonProcesses(includeOpenFiles: Bool) -> [RoonProcessStatus] {
-        let output = run("/bin/ps", arguments: ["-axo", "pid=,comm=,pcpu=,rss="])
+        let output = processListingProvider()
         return output
             .split(separator: "\n")
             .compactMap(parseProcessLine)
-            .filter { processNames.contains($0.name) || processNames.contains(URL(fileURLWithPath: $0.path).lastPathComponent) }
             .map { process in
                 var copy = process
                 if includeOpenFiles {
-                    copy.openFiles = openFileCount(pid: process.pid)
+                    copy.openFiles = openFileCountProvider(process.pid)
                 }
                 return copy
             }
     }
 
     private func parseProcessLine(_ line: Substring) -> RoonProcessStatus? {
-        let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+        let parts = line.split(maxSplits: 3, whereSeparator: { $0 == " " || $0 == "\t" })
         guard parts.count >= 4,
               let pid = Int(parts[0]),
-              let cpu = Double(parts[2]),
-              let rssKB = Double(parts[3])
+              let cpu = Double(parts[1]),
+              let rssKB = Double(parts[2])
         else { return nil }
 
-        let path = String(parts[1])
-        let name = URL(fileURLWithPath: path).lastPathComponent
+        let command = String(parts[3])
+        guard let name = processName(in: command) else { return nil }
         return RoonProcessStatus(
             pid: pid,
             name: name,
-            path: path,
+            path: executablePath(in: command),
             cpuPercent: cpu,
             memoryMB: rssKB / 1024,
             openFiles: nil
         )
     }
 
-    private func openFileCount(pid: Int) -> Int? {
-        let output = run("/usr/sbin/lsof", arguments: ["-n", "-p", String(pid)])
-        let count = output.split(separator: "\n").dropFirst().count
+    private func processName(in command: String) -> String? {
+        let executableName = URL(fileURLWithPath: executablePath(in: command)).lastPathComponent
+        return processNames.contains(executableName) ? executableName : nil
+    }
+
+    private func executablePath(in command: String) -> String {
+        String(command.split(whereSeparator: { $0 == " " || $0 == "\t" }).first ?? Substring(command))
+    }
+
+    private static func openFileCount(pid: Int) -> Int? {
+        if let count = procOpenFileCount(pid: pid) {
+            return count
+        }
+
+        let output = run(
+            "/bin/sh",
+            arguments: ["-c", "/usr/sbin/lsof -n -p \(pid) 2>/dev/null | /usr/bin/wc -l"],
+            timeout: 6
+        )
+        let count = Int(output.trimmingCharacters(in: .whitespacesAndNewlines)).map { max(0, $0 - 1) } ?? 0
         return count > 0 ? count : nil
+    }
+
+    private static func procOpenFileCount(pid: Int) -> Int? {
+        let processID = Int32(pid)
+        let entrySize = MemoryLayout<proc_fdinfo>.stride
+        var lastCount: Int?
+
+        for capacity in [256, 512, 1_024, 2_048, 4_096, 8_192] {
+            let bufferSize = capacity * entrySize
+            let buffer = UnsafeMutableRawPointer.allocate(
+                byteCount: bufferSize,
+                alignment: MemoryLayout<proc_fdinfo>.alignment
+            )
+            defer { buffer.deallocate() }
+
+            let returnedBytes = proc_pidinfo(processID, PROC_PIDLISTFDS, 0, buffer, Int32(bufferSize))
+            guard returnedBytes > 0 else { continue }
+
+            let count = Int(returnedBytes) / entrySize
+            lastCount = count
+            if Int(returnedBytes) < bufferSize {
+                return count
+            }
+        }
+
+        return lastCount
+    }
+
+    private static func roonProcessListing(processNames: Set<String>) -> String {
+        let pattern = processNames.sorted().joined(separator: "|")
+        let pidOutput = run("/usr/bin/pgrep", arguments: ["-x", pattern], timeout: 2)
+        let pids = pidOutput
+            .split(whereSeparator: { $0 == "\n" || $0 == " " || $0 == "\t" })
+            .compactMap { Int($0) }
+            .map(String.init)
+
+        guard !pids.isEmpty else { return "" }
+        return run(
+            "/bin/ps",
+            arguments: ["-p", pids.joined(separator: ","), "-o", "pid=,pcpu=,rss=,command="],
+            timeout: 2
+        )
     }
 
     private func diskStatus(discoverer: RoonLogDiscoverer) -> (path: String, freeMB: Double, freeRatio: Double)? {
@@ -121,7 +190,7 @@ public struct LocalSystemSampler {
         return nil
     }
 
-    private func run(_ executable: String, arguments: [String]) -> String {
+    private static func run(_ executable: String, arguments: [String], timeout: TimeInterval = 4) -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -129,10 +198,17 @@ public struct LocalSystemSampler {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()
+        let completion = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            completion.signal()
+        }
 
         do {
             try process.run()
-            process.waitUntilExit()
+            if completion.wait(timeout: .now() + timeout) == .timedOut {
+                process.terminate()
+                _ = completion.wait(timeout: .now() + 1)
+            }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             return String(data: data, encoding: .utf8) ?? ""
         } catch {

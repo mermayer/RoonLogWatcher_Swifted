@@ -14,6 +14,7 @@ public final class RuntimeStore {
     private var playback = BoundedArray<RuntimeEvent>(limit: 240)
     private var memoryByMetric: [String: MemoryMetric] = [:]
     private var memoryHistory = BoundedArray<MemoryMetric>(limit: 5_760)
+    private var physicalMemoryTrendHistory = BoundedArray<MemoryTrendPoint>(limit: 2_880)
     private var processMemoryHistory = BoundedArray<MemoryTrendPoint>(limit: 2_880)
     private var sources: [String: WatchedSource] = [:]
     private var systemStatus: LocalSystemStatus?
@@ -23,6 +24,7 @@ public final class RuntimeStore {
     private var warningCount = 0
     private var criticalCount = 0
     private let alertSnapshotWindow: TimeInterval = 12 * 60 * 60
+    private let memoryTrendMinimumSampleInterval: TimeInterval = 30
 
     public init(configuration: AppConfiguration = .default) {
         self.configuration = configuration.normalized()
@@ -147,6 +149,7 @@ public final class RuntimeStore {
                     )
                     memoryByMetric[event.title] = metric
                     memoryHistory.append(metric)
+                    appendPhysicalMemoryTrendSampleIfNeeded(metric)
                 }
             }
         }
@@ -340,17 +343,9 @@ public final class RuntimeStore {
         let processSamples = processMemoryHistory.items
             .filter { $0.time >= windowStart && $0.time <= now }
             .sorted { $0.time < $1.time }
-        let physicalSamples = memoryHistory.items
-            .filter { $0.metric == "Physical Memory" && $0.updatedAt >= windowStart && $0.updatedAt <= now }
-            .sorted { $0.updatedAt < $1.updatedAt }
-            .map {
-                MemoryTrendPoint(
-                    time: $0.updatedAt,
-                    metric: $0.metric,
-                    valueMB: $0.valueMB,
-                    source: $0.source
-                )
-            }
+        let physicalSamples = physicalMemoryTrendHistory.items
+            .filter { $0.time >= windowStart && $0.time <= now }
+            .sorted { $0.time < $1.time }
         let samples = physicalSamples.isEmpty ? processSamples : physicalSamples
         guard samples.count > bucketCount else { return samples }
 
@@ -365,6 +360,24 @@ public final class RuntimeStore {
             buckets[index] = sample
         }
         return buckets.compactMap { $0 }
+    }
+
+    private func appendPhysicalMemoryTrendSampleIfNeeded(_ metric: MemoryMetric) {
+        guard metric.metric == "Physical Memory" else { return }
+        let point = MemoryTrendPoint(
+            time: metric.updatedAt,
+            metric: metric.metric,
+            valueMB: metric.valueMB,
+            source: metric.source
+        )
+        guard let previous = physicalMemoryTrendHistory.items.last else {
+            physicalMemoryTrendHistory.append(point)
+            return
+        }
+        if point.time < previous.time
+            || point.time.timeIntervalSince(previous.time) >= memoryTrendMinimumSampleInterval {
+            physicalMemoryTrendHistory.append(point)
+        }
     }
 
     private func sourceMetadata(
