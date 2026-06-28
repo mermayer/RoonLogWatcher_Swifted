@@ -16,7 +16,10 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let configStore = AppConfigStore()
         let config = configStore.configuration
-        let runtime = RuntimeStore(configuration: config)
+        let runtime = RuntimeStore(
+            configuration: config,
+            memoryInsightStoreURL: configStore.configURL.deletingLastPathComponent().appendingPathComponent("memory-insights.json")
+        )
         let parser = LogParser()
         let dashboardServer = DashboardServer(store: runtime, configStore: configStore)
         let discoverer = RoonLogDiscoverer(configStore: configStore)

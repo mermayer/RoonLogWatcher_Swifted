@@ -27,6 +27,32 @@ feed. Direct Roon Server API access is not required.
 
 ![Roon Health details](docs/screenshots/readme/health-details.png)
 
+## Dashboard Workflow
+
+The dashboard is designed for both local use on the Roon Mac and remote use from
+another browser on the same network. The right sidebar keeps the most important
+operational lists close to the live stream:
+
+- **Alerts** shows deduplicated warnings and critical log events. The default
+  live-stream level filter is `Warnings + Critical`, so routine informational
+  lines do not hide relevant problems.
+- **Memory Insights** lists detected Roon memory jumps from the last seven days
+  and keeps related log context available below each insight.
+- **Playback & RAAT Events** is scoped to playback and RAAT activity only. Its
+  full view does not include unrelated system, memory or generic highlighted log
+  timeline entries.
+
+The sidebar footer actions open structured dashboard panels instead of raw JSON:
+
+| Action | Opens | Useful controls |
+| --- | --- | --- |
+| View all alerts | Full alert list | Search, severity filter, full message text |
+| View week of memory insights | Seven-day memory insight list | Search, deltas, confidence, related log lines |
+| View all Playback & RAAT events | Full playback/RAAT event list | Search, severity filter, source/type/zone chips |
+
+Expanded related-log sections stay open while the live dashboard refreshes, so a
+memory insight or warning can be inspected without pausing the live stream first.
+
 ## What Gets Monitored
 
 The watcher combines log-derived events with local system signals:
@@ -42,6 +68,9 @@ The watcher combines log-derived events with local system signals:
   whole files on every refresh.
 - Roon memory lines: physical, managed, unmanaged and virtual memory, plus a
   compact 24-hour Roon memory trend in the live-log header.
+- Automatic memory-jump analysis: large physical, managed or unmanaged memory
+  changes are correlated with nearby Roon log activity and retained for seven
+  days.
 - Playback activity and instability: playing, stopped, buffering, timeout,
   failed, dropped and network error style lines.
 - RAAT activity: connect, reconnect, disconnect, transport lost and device lost.
@@ -56,7 +85,34 @@ The watcher combines log-derived events with local system signals:
   yet.
 - Dashboard state: retained recent logs, exportable log history, deduplicated
   alerts, playback/RAAT timeline, log-volume buckets, health trend samples and
-  24-hour memory trend samples.
+  24-hour memory trend samples, plus seven days of memory-jump insights.
+
+## Memory Jump Analysis
+
+The dashboard includes a **Memory Insights** section for larger Roon memory
+changes. When a new Roon stats sample arrives, the app compares it with the
+previous sample. A new insight is created when one of these default thresholds is
+crossed:
+
+| Metric | Default jump threshold |
+| --- | ---: |
+| Physical memory | 150 MB |
+| Managed memory | 250 MB |
+| Unmanaged memory | 250 MB |
+
+For each detected jump, the app looks at nearby non-stats Roon log lines in a
+two-minute window before and after the sample. It classifies the surrounding
+activity into categories such as startup/warm-up, metadata update, library work,
+streaming-service sync, cache/image work, playback/RAAT, database or
+network/API activity. The dashboard then shows the memory delta, confidence,
+sample window and the most relevant related log lines.
+
+These insights are correlation hints, not proof of root cause. Roon logs usually
+do not state exactly which internal task allocated or released memory, but the
+nearby log context is often good enough to explain whether a jump happened during
+metadata work, startup cache loading, streaming sync, playback activity or other
+visible work. Insights are persisted in the app configuration folder as
+`memory-insights.json` and pruned after seven days.
 
 ## Roon Health Score
 

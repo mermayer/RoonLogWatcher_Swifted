@@ -67,6 +67,7 @@ public struct RuntimeSnapshot: Codable {
     public var health: RoonHealth
     public var healthTrend: [RoonHealthTrendPoint]
     public var memoryTrend24h: [MemoryTrendPoint]
+    public var memoryInsights: [MemoryInsight]
     public var system: LocalSystemStatus?
     public var watchedSources: [WatchedSource]
     public var memory: [MemoryMetric]
@@ -155,6 +156,33 @@ public struct MemoryTrendPoint: Codable, Identifiable {
     public var time: Date
     public var metric: String
     public var valueMB: Double
+    public var source: String
+}
+
+public struct MemoryInsight: Codable, Identifiable {
+    public var id: String
+    public var observedAt: Date
+    public var source: String
+    public var direction: String
+    public var category: String
+    public var confidence: Double
+    public var summary: String
+    public var windowSeconds: Double
+    public var beforePhysicalMB: Double
+    public var afterPhysicalMB: Double
+    public var deltaPhysicalMB: Double
+    public var deltaManagedMB: Double?
+    public var deltaUnmanagedMB: Double?
+    public var deltaVirtualMB: Double?
+    public var relatedEvents: [MemoryInsightEvidence]
+}
+
+public struct MemoryInsightEvidence: Codable, Identifiable {
+    public var id: String
+    public var time: Date
+    public var category: String
+    public var title: String
+    public var message: String
     public var source: String
 }
 

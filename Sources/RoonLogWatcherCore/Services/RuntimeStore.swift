@@ -16,6 +16,9 @@ public final class RuntimeStore {
     private var memoryHistory = BoundedArray<MemoryMetric>(limit: 5_760)
     private var physicalMemoryTrendHistory = BoundedArray<MemoryTrendPoint>(limit: 2_880)
     private var processMemoryHistory = BoundedArray<MemoryTrendPoint>(limit: 2_880)
+    private var memoryContextHistory = BoundedArray<MemoryInsightEvidence>(limit: 20_000)
+    private var memoryInsights = BoundedArray<MemoryInsight>(limit: 1_000)
+    private var lastMemoryStatsSample: MemoryStatsSample?
     private var sources: [String: WatchedSource] = [:]
     private var systemStatus: LocalSystemStatus?
     private var healthTrend = BoundedArray<RoonHealthTrendPoint>(limit: 2_880)
@@ -23,13 +26,21 @@ public final class RuntimeStore {
     private var processedLines = 0
     private var warningCount = 0
     private var criticalCount = 0
+    private let memoryInsightStoreURL: URL?
     private let alertSnapshotWindow: TimeInterval = 12 * 60 * 60
     private let memoryTrendMinimumSampleInterval: TimeInterval = 30
+    private let memoryInsightRetention: TimeInterval = 7 * 24 * 60 * 60
+    private let memoryInsightContextWindow: TimeInterval = 2 * 60
+    private let memoryJumpPhysicalThresholdMB: Double = 150
+    private let memoryJumpManagedThresholdMB: Double = 250
+    private let memoryJumpUnmanagedThresholdMB: Double = 250
 
-    public init(configuration: AppConfiguration = .default) {
+    public init(configuration: AppConfiguration = .default, memoryInsightStoreURL: URL? = nil) {
         self.configuration = configuration.normalized()
+        self.memoryInsightStoreURL = memoryInsightStoreURL
         self.recentLogs = BoundedArray<LogLine>(limit: self.configuration.recentLogMaxLines)
         self.logHistory = BoundedArray<LogLine>(limit: self.configuration.logHistoryMaxLines)
+        loadMemoryInsights()
     }
 
     public func setDashboardURL(_ url: URL?) {
@@ -106,6 +117,15 @@ public final class RuntimeStore {
             )
             recentLogs.append(entry)
             logHistory.append(entry)
+            if let context = Self.memoryContextEvidence(
+                line: line,
+                source: sourceName,
+                time: Self.extractTimestamp(from: line) ?? events.first?.time ?? now,
+                maxCharacters: configuration.maxLogLineCharacters
+            ) {
+                memoryContextHistory.append(context)
+                updateMemoryInsights(with: context, now: now)
+            }
 
             var source = sources[file] ?? sourceMetadata(
                 id: file,
@@ -152,6 +172,10 @@ public final class RuntimeStore {
                     appendPhysicalMemoryTrendSampleIfNeeded(metric)
                 }
             }
+            if let sample = Self.memoryStatsSample(from: events, source: sourceName) {
+                appendMemoryInsightIfNeeded(sample: sample, now: now)
+            }
+            pruneMemoryInsightHistory(now: now)
         }
     }
 
@@ -204,6 +228,7 @@ public final class RuntimeStore {
                 health: health,
                 healthTrend: healthTrend.items,
                 memoryTrend24h: memoryTrend24h(now: now),
+                memoryInsights: visibleMemoryInsights(now: now),
                 system: systemStatus,
                 watchedSources: sortedSources,
                 memory: sortedMemory,
@@ -380,6 +405,283 @@ public final class RuntimeStore {
         }
     }
 
+    private func appendMemoryInsightIfNeeded(sample: MemoryStatsSample, now: Date) {
+        defer { lastMemoryStatsSample = sample }
+        guard let previous = lastMemoryStatsSample else { return }
+        guard sample.time >= previous.time else { return }
+        let windowSeconds = sample.time.timeIntervalSince(previous.time)
+        guard windowSeconds > 0, windowSeconds <= 10 * 60 else { return }
+
+        let deltaPhysical = sample.physicalMB - previous.physicalMB
+        let deltaManaged = sample.managedMB.flatMap { current in previous.managedMB.map { current - $0 } }
+        let deltaUnmanaged = sample.unmanagedMB.flatMap { current in previous.unmanagedMB.map { current - $0 } }
+        let deltaVirtual = sample.virtualMB.flatMap { current in previous.virtualMB.map { current - $0 } }
+        let isJump = abs(deltaPhysical) >= memoryJumpPhysicalThresholdMB
+            || abs(deltaManaged ?? 0) >= memoryJumpManagedThresholdMB
+            || abs(deltaUnmanaged ?? 0) >= memoryJumpUnmanagedThresholdMB
+        guard isJump else { return }
+
+        let related = relatedMemoryContext(around: sample.time)
+        let category = Self.strongestMemoryCategory(from: related)
+        let confidence = Self.memoryInsightConfidence(category: category, relatedEvents: related)
+        let direction = deltaPhysical >= 0 ? "increase" : "decrease"
+        let insight = MemoryInsight(
+            id: "\(Int(sample.time.timeIntervalSince1970))-\(direction)-\(Int(abs(deltaPhysical).rounded()))",
+            observedAt: sample.time,
+            source: sample.source,
+            direction: direction,
+            category: category,
+            confidence: confidence,
+            summary: Self.memoryInsightSummary(direction: direction, category: category, deltaPhysicalMB: deltaPhysical, relatedCount: related.count),
+            windowSeconds: windowSeconds,
+            beforePhysicalMB: previous.physicalMB,
+            afterPhysicalMB: sample.physicalMB,
+            deltaPhysicalMB: deltaPhysical,
+            deltaManagedMB: deltaManaged,
+            deltaUnmanagedMB: deltaUnmanaged,
+            deltaVirtualMB: deltaVirtual,
+            relatedEvents: Array(related.prefix(6))
+        )
+        memoryInsights.append(insight)
+        saveMemoryInsights()
+    }
+
+    private func updateMemoryInsights(with evidence: MemoryInsightEvidence, now: Date) {
+        var updated = false
+        let nextInsights = memoryInsights.items.map { insight -> MemoryInsight in
+            guard abs(evidence.time.timeIntervalSince(insight.observedAt)) <= memoryInsightContextWindow else {
+                return insight
+            }
+            guard !insight.relatedEvents.contains(where: { $0.time == evidence.time && $0.message == evidence.message }) else {
+                return insight
+            }
+
+            var copy = insight
+            copy.relatedEvents.append(evidence)
+            copy.relatedEvents = Array(Self.sortedMemoryEvidence(copy.relatedEvents, around: copy.observedAt).prefix(6))
+            copy.category = Self.strongestMemoryCategory(from: copy.relatedEvents)
+            copy.confidence = Self.memoryInsightConfidence(category: copy.category, relatedEvents: copy.relatedEvents)
+            copy.summary = Self.memoryInsightSummary(
+                direction: copy.direction,
+                category: copy.category,
+                deltaPhysicalMB: copy.deltaPhysicalMB,
+                relatedCount: copy.relatedEvents.count
+            )
+            updated = true
+            return copy
+        }
+        if updated {
+            memoryInsights.replace(with: nextInsights)
+            pruneMemoryInsightHistory(now: now)
+            saveMemoryInsights()
+        }
+    }
+
+    private func relatedMemoryContext(around date: Date) -> [MemoryInsightEvidence] {
+        let start = date.addingTimeInterval(-memoryInsightContextWindow)
+        let end = date.addingTimeInterval(memoryInsightContextWindow)
+        return Self.sortedMemoryEvidence(
+            memoryContextHistory.items.filter { $0.time >= start && $0.time <= end },
+            around: date
+        )
+    }
+
+    private func visibleMemoryInsights(now: Date) -> [MemoryInsight] {
+        let cutoff = now.addingTimeInterval(-memoryInsightRetention)
+        return memoryInsights.items
+            .filter { $0.observedAt >= cutoff }
+            .sorted { $0.observedAt > $1.observedAt }
+    }
+
+    private func pruneMemoryInsightHistory(now: Date) {
+        let cutoff = now.addingTimeInterval(-memoryInsightRetention)
+        let insightCount = memoryInsights.items.count
+        memoryInsights.removeAll { $0.observedAt < cutoff }
+        memoryContextHistory.removeAll { $0.time < cutoff }
+        if memoryInsights.items.count != insightCount {
+            saveMemoryInsights()
+        }
+    }
+
+    private func loadMemoryInsights() {
+        guard let memoryInsightStoreURL,
+              let data = try? Data(contentsOf: memoryInsightStoreURL)
+        else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let document = try? decoder.decode(MemoryInsightDocument.self, from: data) else { return }
+        let cutoff = Date().addingTimeInterval(-memoryInsightRetention)
+        memoryInsights.replace(with: document.insights.filter { $0.observedAt >= cutoff }.sorted { $0.observedAt < $1.observedAt })
+    }
+
+    private func saveMemoryInsights() {
+        guard let memoryInsightStoreURL else { return }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let document = MemoryInsightDocument(insights: memoryInsights.items)
+        do {
+            try FileManager.default.createDirectory(at: memoryInsightStoreURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try encoder.encode(document)
+            try data.write(to: memoryInsightStoreURL, options: [.atomic])
+        } catch {
+            // Persistence is best-effort; live diagnostics should continue even if the cache cannot be written.
+        }
+    }
+
+    private static func memoryStatsSample(from events: [RuntimeEvent], source: String) -> MemoryStatsSample? {
+        let memoryEvents = events.filter { $0.domain == "memory" }
+        guard let physical = memoryEvents.first(where: { $0.title == "Physical Memory" })?.valueMB else { return nil }
+        return MemoryStatsSample(
+            time: memoryEvents.first(where: { $0.title == "Physical Memory" })?.time ?? memoryEvents.first?.time ?? Date(),
+            source: source,
+            physicalMB: physical,
+            managedMB: memoryEvents.first(where: { $0.title == "Managed Memory" })?.valueMB,
+            unmanagedMB: memoryEvents.first(where: { $0.title == "Unmanaged Memory" })?.valueMB,
+            virtualMB: memoryEvents.first(where: { $0.title == "Virtual Memory" })?.valueMB
+        )
+    }
+
+    private static func memoryContextEvidence(line: String, source: String, time: Date, maxCharacters: Int) -> MemoryInsightEvidence? {
+        let lower = line.lowercased()
+        guard !lower.contains("[stats]") else { return nil }
+        guard let category = memoryContextCategory(lower) else { return nil }
+        return MemoryInsightEvidence(
+            id: UUID().uuidString,
+            time: time,
+            category: category,
+            title: memoryCategoryTitle(category),
+            message: truncatedLogLine(line, maxCharacters: min(maxCharacters, 600)),
+            source: source
+        )
+    }
+
+    private static func memoryContextCategory(_ lower: String) -> String? {
+        if containsAny(lower, ["starting roon", "roonserver start", "server startup", "loaded 100", "loaded ", "cache entries", "adding storage location", "media availability", "initializing filebrowser", "created disabled location"]) {
+            return "startup"
+        }
+        if containsAny(lower, ["metadatasvc", "metadata", "updatemetadata", "identification", "clumping", "dirty tracks", "dirty albums"]) {
+            return "metadata"
+        }
+        if containsAny(lower, ["[library]", "library stats", "library/compute", "computing ", "cleanup", "tracks:", "albums:", "import", "analysis", "scanner"]) {
+            return "library"
+        }
+        if containsAny(lower, ["tidal", "qobuz", "favorite albums", "favorite tracks", "favorite playlists", "playlists cached", "[swim]", "broker/accounts"]) {
+            return "streaming"
+        }
+        if containsAny(lower, ["httpcache", "filecache", "image", "cache", "coverart", "artwork"]) {
+            return "cache"
+        }
+        if containsAny(lower, ["raat", "playback", "zone", "transport", "audio", "buffering", "signalpath"]) {
+            return "playback"
+        }
+        if containsAny(lower, ["database", "sqlite", "query", "checkpoint", "vacuum"]) {
+            return "database"
+        }
+        if containsAny(lower, ["easyhttp", "timeout", "network", "api.roonlabs.net"]) {
+            return "network"
+        }
+        if containsAny(lower, ["warn:", "error:", "exception", "failed"]) {
+            return "log"
+        }
+        return nil
+    }
+
+    private static func strongestMemoryCategory(from evidence: [MemoryInsightEvidence]) -> String {
+        guard !evidence.isEmpty else { return "unknown" }
+        let weights = [
+            "startup": 4,
+            "metadata": 4,
+            "library": 3,
+            "streaming": 3,
+            "cache": 2,
+            "playback": 2,
+            "database": 2,
+            "network": 1,
+            "log": 1
+        ]
+        let scores = evidence.reduce(into: [String: Int]()) { result, item in
+            result[item.category, default: 0] += weights[item.category, default: 1]
+        }
+        return scores.sorted {
+            if $0.value == $1.value {
+                return memoryCategoryRank($0.key) < memoryCategoryRank($1.key)
+            }
+            return $0.value > $1.value
+        }.first?.key ?? "unknown"
+    }
+
+    private static func memoryInsightConfidence(category: String, relatedEvents: [MemoryInsightEvidence]) -> Double {
+        guard category != "unknown", !relatedEvents.isEmpty else { return 0.2 }
+        let matching = relatedEvents.filter { $0.category == category }.count
+        return min(0.95, 0.35 + Double(relatedEvents.count) * 0.06 + Double(matching) * 0.08)
+    }
+
+    private static func memoryInsightSummary(direction: String, category: String, deltaPhysicalMB: Double, relatedCount: Int) -> String {
+        let sign = deltaPhysicalMB >= 0 ? "+" : "-"
+        let amount = "\(sign)\(Int(abs(deltaPhysicalMB).rounded())) MB"
+        let directionText = direction == "increase" ? "increase" : "release"
+        let categoryText = memoryCategoryTitle(category).lowercased()
+        if category == "unknown" {
+            return "Memory \(directionText) \(amount); no clear nearby log cause found."
+        }
+        return "Memory \(directionText) \(amount) near \(categoryText) activity (\(relatedCount) related log lines)."
+    }
+
+    private static func memoryCategoryTitle(_ category: String) -> String {
+        switch category {
+        case "startup": return "Startup / warm-up"
+        case "metadata": return "Metadata update"
+        case "library": return "Library work"
+        case "streaming": return "Streaming-service sync"
+        case "cache": return "Cache / image work"
+        case "playback": return "Playback / RAAT"
+        case "database": return "Database activity"
+        case "network": return "Network/API activity"
+        case "log": return "Log warning"
+        default: return "Unknown"
+        }
+    }
+
+    private static func memoryCategoryRank(_ category: String) -> Int {
+        ["startup", "metadata", "library", "streaming", "cache", "playback", "database", "network", "log", "unknown"].firstIndex(of: category) ?? 99
+    }
+
+    private static func containsAny(_ lower: String, _ patterns: [String]) -> Bool {
+        patterns.contains { lower.contains($0) }
+    }
+
+    private static func sortedMemoryEvidence(_ evidence: [MemoryInsightEvidence], around date: Date) -> [MemoryInsightEvidence] {
+        evidence.sorted {
+            let left = abs($0.time.timeIntervalSince(date))
+            let right = abs($1.time.timeIntervalSince(date))
+            if left == right {
+                return memoryCategoryRank($0.category) < memoryCategoryRank($1.category)
+            }
+            return left < right
+        }
+    }
+
+    private static func extractTimestamp(from line: String) -> Date? {
+        guard let regex = try? NSRegularExpression(pattern: #"(\d{2})/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})"#),
+              let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)),
+              match.numberOfRanges == 6
+        else { return nil }
+
+        func value(_ index: Int) -> Int? {
+            guard let range = Range(match.range(at: index), in: line) else { return nil }
+            return Int(line[range])
+        }
+
+        var components = Calendar.current.dateComponents([.year], from: Date())
+        components.month = value(1)
+        components.day = value(2)
+        components.hour = value(3)
+        components.minute = value(4)
+        components.second = value(5)
+        return Calendar.current.date(from: components)
+    }
+
     private func sourceMetadata(
         id: String,
         path: String,
@@ -433,6 +735,19 @@ private extension NSLock {
         defer { unlock() }
         return body()
     }
+}
+
+private struct MemoryStatsSample {
+    var time: Date
+    var source: String
+    var physicalMB: Double
+    var managedMB: Double?
+    var unmanagedMB: Double?
+    var virtualMB: Double?
+}
+
+private struct MemoryInsightDocument: Codable {
+    var insights: [MemoryInsight]
 }
 
 private extension Array where Element == Severity {

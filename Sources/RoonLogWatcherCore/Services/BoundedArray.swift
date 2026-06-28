@@ -20,4 +20,12 @@ struct BoundedArray<Element> {
             append(item)
         }
     }
+
+    mutating func replace(with newItems: [Element]) {
+        items = Array(newItems.suffix(limit))
+    }
+
+    mutating func removeAll(where shouldRemove: (Element) -> Bool) {
+        items.removeAll(where: shouldRemove)
+    }
 }

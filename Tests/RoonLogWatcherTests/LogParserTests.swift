@@ -118,6 +118,55 @@ final class LogParserTests: XCTestCase {
         XCTAssertEqual(trend.last?.metric, "Physical Memory")
     }
 
+    func testRuntimeStoreCreatesMemoryInsightForLargePhysicalJumpWithContext() {
+        let parser = LogParser()
+        let store = RuntimeStore()
+        let first = Date().addingTimeInterval(-60)
+        let context = first.addingTimeInterval(8)
+        let second = first.addingTimeInterval(22)
+        let source = "/tmp/RoonServer/Logs/RoonServer_log.txt"
+        let contextLine = "\(logTimestamp(for: context)) Trace: [metadatasvc] GOT 250 dirty albums, updating metadata cache"
+        let firstStats = "\(logTimestamp(for: first)) Info: [stats] 420000 MB Virtual 1000 MB Physical 700 MB Managed 300 MB estimated Unmanaged"
+        let secondStats = "\(logTimestamp(for: second)) Info: [stats] 420050 MB Virtual 1260 MB Physical 860 MB Managed 400 MB estimated Unmanaged"
+
+        store.ingest(file: source, line: firstStats, events: parser.parse(file: source, line: firstStats), mode: .live)
+        store.ingest(file: source, line: contextLine, events: parser.parse(file: source, line: contextLine), mode: .live)
+        store.ingest(file: source, line: secondStats, events: parser.parse(file: source, line: secondStats), mode: .live)
+
+        let insight = store.snapshot().memoryInsights.first
+
+        XCTAssertEqual(store.snapshot().memoryInsights.count, 1)
+        XCTAssertEqual(insight?.direction, "increase")
+        XCTAssertEqual(insight?.category, "metadata")
+        XCTAssertEqual(insight?.deltaPhysicalMB ?? 0, 260, accuracy: 0.01)
+        XCTAssertEqual(insight?.deltaManagedMB ?? 0, 160, accuracy: 0.01)
+        XCTAssertFalse(insight?.relatedEvents.isEmpty ?? true)
+        XCTAssertGreaterThan(insight?.confidence ?? 0, 0.35)
+    }
+
+    func testMemoryInsightsPersistAcrossRuntimeStoreRestart() {
+        let parser = LogParser()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RoonLogWatcherTests-\(UUID().uuidString)", isDirectory: true)
+        let storeURL = directory.appendingPathComponent("memory-insights.json")
+        let source = "/tmp/RoonServer/Logs/RoonServer_log.txt"
+        let first = Date().addingTimeInterval(-60)
+        let second = first.addingTimeInterval(20)
+        let firstStats = "\(logTimestamp(for: first)) Info: [stats] 420000 MB Virtual 900 MB Physical 550 MB Managed 350 MB estimated Unmanaged"
+        let secondStats = "\(logTimestamp(for: second)) Info: [stats] 420100 MB Virtual 1105 MB Physical 620 MB Managed 485 MB estimated Unmanaged"
+
+        let store = RuntimeStore(memoryInsightStoreURL: storeURL)
+        store.ingest(file: source, line: firstStats, events: parser.parse(file: source, line: firstStats), mode: .live)
+        store.ingest(file: source, line: secondStats, events: parser.parse(file: source, line: secondStats), mode: .live)
+
+        let restored = RuntimeStore(memoryInsightStoreURL: storeURL)
+
+        XCTAssertEqual(store.snapshot().memoryInsights.count, 1)
+        XCTAssertEqual(restored.snapshot().memoryInsights.count, 1)
+        XCTAssertEqual(restored.snapshot().memoryInsights.first?.deltaPhysicalMB ?? 0, 205, accuracy: 0.01)
+        try? FileManager.default.removeItem(at: directory)
+    }
+
     func testManagedMemoryBelowNinetyTwoPercentDoesNotWarn() {
         let parser = LogParser()
         var configuration = AppConfiguration.default
@@ -589,5 +638,12 @@ final class LogParserTests: XCTestCase {
             valueMB: valueMB,
             zone: nil
         )
+    }
+
+    private func logTimestamp(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MM/dd HH:mm:ss"
+        return formatter.string(from: date)
     }
 }

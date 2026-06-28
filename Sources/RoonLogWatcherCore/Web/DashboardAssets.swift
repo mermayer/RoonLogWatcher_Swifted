@@ -71,7 +71,7 @@ enum DashboardAssets {
               <label class="toggle"><span class="toggle-label" data-i18n="label.autoScroll">Auto Scroll</span> <input id="autoScrollToggle" type="checkbox" checked><span class="toggle-control"></span></label>
             </div>
             <div class="log-toolbar">
-              <button class="pause-button" id="pauseStream" type="button" title="Pause live stream">Ⅱ</button>
+              <button class="pause-button" id="pauseStream" type="button" title="Pause live stream" aria-label="Pause live stream"><span class="pause-icon" aria-hidden="true"></span></button>
               <label data-i18n="label.level">Level</label>
               <select id="levelFilter">
                 <option value="warningCritical" data-i18n="filter.warningCritical">Warnings + Critical</option>
@@ -84,7 +84,6 @@ enum DashboardAssets {
               <label class="checkbox-label"><input id="regexInput" type="checkbox"> Regex</label>
               <span id="streamStatus" class="stream-status" hidden></span>
               <button class="small-button clear-button" id="clearSearch" type="button" data-i18n="action.clear">Clear</button>
-              <button class="kebab-button" type="button">⋮</button>
             </div>
             <div class="log-table-wrap">
               <table class="log-table">
@@ -165,7 +164,16 @@ enum DashboardAssets {
                 </div>
               </div>
               <div id="alertList" class="alert-list"></div>
-              <a class="text-link" href="/api/snapshot" data-i18n="link.viewAllAlerts">View all alerts...</a>
+              <button class="text-link" type="button" data-open-collection="alerts" data-i18n="link.viewAllAlerts">View all alerts...</button>
+            </section>
+
+            <section class="section memory-insights-section">
+              <div class="section-title">
+                <h2 data-i18n="section.memoryInsights">Memory Insights</h2>
+                <span id="memoryInsightCount" class="section-count">0</span>
+              </div>
+              <div id="memoryInsightList" class="memory-insight-list"></div>
+              <button class="text-link" type="button" data-open-collection="memory" data-i18n="link.viewAllMemoryInsights">View week of memory insights...</button>
             </section>
 
             <section class="section playback-section">
@@ -173,7 +181,7 @@ enum DashboardAssets {
                 <h2 data-i18n="section.playbackRaat">Playback & RAAT Events</h2>
               </div>
               <div id="playbackList" class="playback-list"></div>
-              <a class="text-link" href="/api/snapshot" data-i18n="link.viewAllEvents">View all events...</a>
+              <button class="text-link" type="button" data-open-collection="events" data-i18n="link.viewAllEvents">View all Playback & RAAT events...</button>
             </section>
           </aside>
         </section>
@@ -352,6 +360,29 @@ enum DashboardAssets {
                 <button class="button" type="submit" data-i18n="action.saveSources">Save Sources</button>
               </div>
             </form>
+          </div>
+        </aside>
+
+        <aside id="collectionPanel" class="modal-panel" hidden>
+          <div class="modal-card collection-card">
+            <div class="settings-head">
+              <div>
+                <h2 id="collectionTitle">--</h2>
+                <p id="collectionSummary">--</p>
+              </div>
+              <button class="icon-button" id="closeCollection" type="button">×</button>
+            </div>
+            <div class="collection-toolbar">
+              <input id="collectionSearch" type="search" placeholder="Search..." data-i18n-placeholder="collection.search">
+              <select id="collectionLevelFilter">
+                <option value="all" data-i18n="collection.levelAll">All levels</option>
+                <option value="critical" data-i18n="filter.critical">Critical</option>
+                <option value="warning" data-i18n="filter.warnings">Warnings</option>
+                <option value="info">Info</option>
+              </select>
+              <span id="collectionCount" class="collection-count">0</span>
+            </div>
+            <div id="collectionBody" class="collection-body"></div>
           </div>
         </aside>
       </main>
@@ -602,11 +633,16 @@ enum DashboardAssets {
     .workspace {
       height: calc(100vh - 52px);
       display: grid;
-      grid-template-columns: 324px minmax(520px, 1fr) 360px;
+      grid-template-columns: 324px minmax(500px, 1fr) 420px;
     }
 
     .left-rail, .right-rail, .center-pane {
       min-height: 0;
+    }
+
+    .center-pane {
+      min-width: 0;
+      overflow: hidden;
     }
 
     .left-rail, .right-rail {
@@ -618,7 +654,7 @@ enum DashboardAssets {
     .left-rail { border-right: 1px solid var(--line); }
     .right-rail {
       grid-auto-rows: unset;
-      grid-template-rows: minmax(0, 0.96fr) minmax(0, 1.04fr);
+      grid-template-rows: minmax(0, 1.02fr) minmax(0, 0.98fr) minmax(0, 0.82fr);
       overflow: hidden;
       border-left: 1px solid var(--line);
     }
@@ -633,6 +669,10 @@ enum DashboardAssets {
     }
 
     .playback-section {
+      grid-template-rows: 48px minmax(0, 1fr) auto;
+    }
+
+    .memory-insights-section {
       grid-template-rows: 48px minmax(0, 1fr) auto;
     }
 
@@ -657,6 +697,14 @@ enum DashboardAssets {
       text-transform: uppercase;
       letter-spacing: 0.02em;
       font-weight: 760;
+    }
+
+    .section-count {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
     }
 
     .section-title span {
@@ -1102,26 +1150,123 @@ enum DashboardAssets {
     .toggle input:checked + .toggle-control::after { transform: translateX(15px); }
 
     .log-toolbar {
-      gap: 10px;
+      gap: 8px;
       padding: 0 18px;
       color: var(--muted);
       font-size: 13px;
+      min-width: 0;
+      display: flex;
+      width: calc(100vw - 744px);
+      max-width: calc(100vw - 744px);
+      box-sizing: border-box;
+      overflow: hidden;
     }
 
-    .pause-button, .kebab-button {
-      width: 30px;
-      height: 28px;
+    .log-toolbar > * {
+      min-width: 0;
+    }
+
+    .log-toolbar select {
+      flex: 0 1 150px;
+      width: 150px;
+    }
+
+    .log-toolbar input[type="search"] {
+      flex: 1 1 120px;
+      width: auto;
+      min-width: 80px;
+    }
+
+    .log-toolbar .checkbox-label,
+    .log-toolbar .small-button,
+    .log-toolbar .pause-button,
+    .log-toolbar > label:not(.checkbox-label) {
+      flex: 0 0 auto;
+    }
+
+    .log-toolbar .stream-status {
+      flex: 1 1 auto;
+      margin-left: 0;
+    }
+
+    .pause-button {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 30px;
       border: 1px solid var(--line);
-      border-radius: 5px;
-      background: #121820;
+      border-radius: 7px;
+      background: linear-gradient(180deg, #17202b 0%, #111820 100%);
       color: #dce4eb;
-      font-weight: 720;
+      cursor: pointer;
+      transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease, transform 0.16s ease;
+    }
+
+    .pause-button:hover {
+      border-color: rgba(87, 170, 255, 0.58);
+      color: #ffffff;
+      background: linear-gradient(180deg, #1b2733 0%, #131d27 100%);
+      transform: translateY(-1px);
+    }
+
+    .pause-button:focus-visible {
+      outline: 2px solid rgba(87, 170, 255, 0.55);
+      outline-offset: 2px;
+    }
+
+    .pause-icon {
+      position: relative;
+      display: block;
+      width: 14px;
+      height: 14px;
+    }
+
+    .pause-icon::before,
+    .pause-icon::after {
+      content: "";
+      position: absolute;
+      top: 1px;
+      bottom: 1px;
+      width: 4px;
+      border-radius: 2px;
+      background: currentColor;
+    }
+
+    .pause-icon::before {
+      left: 2px;
+    }
+
+    .pause-icon::after {
+      right: 2px;
     }
 
     .pause-button.is-paused {
       border-color: rgba(255, 211, 78, 0.65);
       color: var(--yellow);
       background: rgba(255, 211, 78, 0.1);
+    }
+
+    .pause-button.is-paused:hover {
+      background: rgba(255, 211, 78, 0.16);
+    }
+
+    .pause-button.is-paused .pause-icon::before {
+      left: 4px;
+      top: 1px;
+      bottom: auto;
+      width: 0;
+      height: 0;
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+      border-left: 9px solid currentColor;
+      border-radius: 1px;
+      background: transparent;
+    }
+
+    .pause-button.is-paused .pause-icon::after {
+      display: none;
     }
 
     select {
@@ -1227,6 +1372,21 @@ enum DashboardAssets {
       color: var(--muted) !important;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
       text-align: center;
+    }
+
+    .empty-cell-content {
+      min-height: 72px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      white-space: normal;
+    }
+
+    .empty-cell-content strong {
+      color: #cbd3dc;
+      font-weight: 650;
     }
 
     .log-row-info td:first-child { box-shadow: inset 3px 0 0 rgba(98, 209, 125, 0.45); }
@@ -1485,7 +1645,7 @@ enum DashboardAssets {
       font-variant-numeric: tabular-nums;
     }
 
-    .alert-list, .playback-list {
+    .alert-list, .playback-list, .memory-insight-list {
       min-height: 0;
       display: grid;
       align-content: start;
@@ -1566,12 +1726,21 @@ enum DashboardAssets {
       position: relative;
       z-index: 1;
       display: block;
+      width: 100%;
       padding: 14px 20px 20px;
+      border: 0;
+      border-top: 1px solid var(--line);
       color: #76aaff;
       background: rgba(18, 23, 29, 0.92);
       text-decoration: none;
       font-weight: 620;
-      border-top: 1px solid var(--line);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .text-link:hover {
+      color: #a9caff;
+      background: rgba(24, 32, 41, 0.95);
     }
 
     .play-row {
@@ -1589,6 +1758,125 @@ enum DashboardAssets {
     .play-row:first-child .play-icon {
       background: rgba(98, 209, 125, 0.18);
       color: var(--green);
+    }
+
+    .memory-insight-list {
+      gap: 10px;
+      padding: 10px 16px 12px;
+    }
+
+    .memory-insight-card {
+      min-width: 0;
+      display: grid;
+      gap: 8px;
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--yellow);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .memory-insight-card.decrease {
+      border-left-color: var(--green);
+    }
+
+    .memory-insight-head {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+    }
+
+    .memory-insight-title {
+      min-width: 0;
+      color: #e5edf5;
+      font-size: 13px;
+      line-height: 1.25;
+      font-weight: 760;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .memory-insight-delta {
+      color: var(--yellow);
+      font-size: 12px;
+      font-weight: 820;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .memory-insight-card.decrease .memory-insight-delta {
+      color: var(--green);
+    }
+
+    .memory-insight-summary {
+      color: #b7c0ca;
+      font-size: 12px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .memory-insight-meta,
+    .memory-insight-chips,
+    .memory-evidence-row {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .memory-insight-meta {
+      color: var(--muted);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .memory-chip {
+      max-width: 100%;
+      padding: 2px 6px;
+      border: 1px solid rgba(139, 152, 166, 0.24);
+      border-radius: 999px;
+      color: #cbd4dd;
+      background: rgba(12, 17, 23, 0.72);
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .memory-insight-evidence {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .memory-insight-evidence summary {
+      cursor: pointer;
+      color: #8fbaff;
+      font-weight: 650;
+    }
+
+    .memory-evidence-list {
+      display: grid;
+      gap: 7px;
+      margin-top: 8px;
+    }
+
+    .memory-evidence-row {
+      padding-top: 7px;
+      border-top: 1px solid rgba(139, 152, 166, 0.16);
+    }
+
+    .memory-evidence-row p {
+      flex: 1 1 100%;
+      color: #aeb8c4;
+      font: 11px/1.4 "SF Mono", Menlo, Consolas, monospace;
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
 
     .empty {
@@ -1770,6 +2058,166 @@ enum DashboardAssets {
 
     .health-card {
       width: min(620px, 100vw);
+    }
+
+    .collection-card {
+      width: min(920px, 100vw);
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .collection-card .settings-head p {
+      max-width: none;
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
+
+    .collection-toolbar {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) 150px auto;
+      gap: 10px;
+      align-items: center;
+      padding: 14px 22px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(12, 17, 23, 0.72);
+    }
+
+    .collection-toolbar input,
+    .collection-toolbar select {
+      width: 100%;
+      min-width: 0;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #0c1117;
+      color: var(--text);
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    }
+
+    .collection-toolbar input {
+      padding: 0 10px;
+    }
+
+    .collection-count {
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .collection-body {
+      min-height: 0;
+      display: grid;
+      align-content: start;
+      gap: 10px;
+      overflow: auto;
+      padding: 16px 22px 24px;
+      overscroll-behavior: contain;
+    }
+
+    .collection-card-row {
+      min-width: 0;
+      display: grid;
+      gap: 9px;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--level-info);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .collection-card-row.warning {
+      border-left-color: var(--level-warning);
+    }
+
+    .collection-card-row.critical {
+      border-left-color: var(--level-critical);
+    }
+
+    .collection-card-row.memory-increase {
+      border-left-color: var(--level-warning);
+    }
+
+    .collection-card-row.memory-decrease {
+      border-left-color: var(--level-info);
+    }
+
+    .collection-row-head {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .collection-row-head strong {
+      min-width: 0;
+      color: #e7edf4;
+      font-size: 14px;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+
+    .collection-row-head time,
+    .collection-meta {
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .collection-meta {
+      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .collection-pill {
+      max-width: 100%;
+      padding: 2px 7px;
+      border: 1px solid rgba(139, 152, 166, 0.24);
+      border-radius: 999px;
+      color: #cbd4dd;
+      background: rgba(12, 17, 23, 0.72);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .collection-message {
+      margin: 0;
+      color: #b8c2cd;
+      font: 12px/1.5 "SF Mono", Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .collection-summary {
+      margin: 0;
+      color: #b8c2cd;
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .collection-evidence {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .collection-evidence summary {
+      cursor: pointer;
+      color: #8fbaff;
+      font-weight: 650;
+    }
+
+    .collection-evidence-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
     }
 
     .health-detail-body {
@@ -1960,9 +2408,13 @@ enum DashboardAssets {
       body { overflow: auto; }
       .app-shell { min-width: 980px; overflow: visible; height: auto; min-height: 100vh; }
       .workspace { grid-template-columns: 280px minmax(440px, 1fr); height: auto; }
+      .log-toolbar {
+        width: calc(100vw - 280px);
+        max-width: calc(100vw - 280px);
+      }
       .right-rail {
         grid-column: 1 / -1;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         grid-template-rows: auto;
         overflow: visible;
         border-left: 0;
@@ -2065,7 +2517,7 @@ enum DashboardAssets {
       .right-rail {
         grid-column: auto;
         grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: auto auto;
+        grid-template-rows: auto auto auto;
         overflow: visible;
       }
 
@@ -2084,6 +2536,11 @@ enum DashboardAssets {
         height: auto;
         min-height: 44px;
         flex-wrap: wrap;
+      }
+
+      .log-toolbar {
+        width: 100%;
+        max-width: 100%;
       }
 
       .pane-header {
@@ -2206,6 +2663,23 @@ enum DashboardAssets {
         max-height: calc(100vh - 20px);
       }
 
+      .collection-toolbar {
+        grid-template-columns: 1fr;
+      }
+
+      .collection-row-head {
+        grid-template-columns: auto minmax(0, 1fr);
+      }
+
+      .collection-row-head .level-badge {
+        grid-column: 1;
+      }
+
+      .collection-row-head time {
+        grid-column: 1 / -1;
+        justify-self: start;
+      }
+
       .source-detail-row code,
       .health-detail-row code {
         white-space: normal;
@@ -2254,6 +2728,7 @@ enum DashboardAssets {
     const initialLevel = storedUIState.levelDefaultVersion === LEVEL_DEFAULT_VERSION
       ? storedChoice(storedUIState.level, supportedLevels, DEFAULT_LEVEL)
       : DEFAULT_LEVEL;
+    const LOG_RENDER_LIMIT = 500;
 
     const state = {
       level: initialLevel,
@@ -2270,6 +2745,8 @@ enum DashboardAssets {
       selectedLog: null,
       selectedAlertId: null,
       selectedAlert: null,
+      openMemoryInsightIds: new Set(),
+      openCollectionDetailIds: new Set(),
       alertFilter: storedChoice(storedUIState.alertFilter, supportedAlertFilters, "all"),
       bufferedCount: 0,
       clearedThroughLogId: 0,
@@ -2279,6 +2756,9 @@ enum DashboardAssets {
       volumeChartScaleEnd: 0,
       volumeChartScaleMax: 20,
       volumeChartScaleWindow: storedWindow(storedUIState.volumeWindowMinutes),
+      collectionKind: null,
+      collectionQuery: "",
+      collectionLevel: "all",
       sourcePromptShown: false
     };
 
@@ -2292,10 +2772,13 @@ enum DashboardAssets {
         "action.settings": "Settings",
         "action.manageSources": "Manage Sources...",
         "action.clear": "Clear",
+        "action.pauseStream": "Pause live stream",
+        "action.resumeStream": "Resume live stream",
         "action.reload": "Reload",
         "action.saveConfig": "Save Config",
         "action.copy": "Copy",
         "action.close": "Close",
+        "action.showAllLogs": "Show all",
         "action.allSettings": "All Settings",
         "action.saveSources": "Save Sources",
         "action.exportIncident": "Export Diagnosis",
@@ -2304,6 +2787,7 @@ enum DashboardAssets {
         "section.memoryResources": "Memory & Resources",
         "section.liveLogStream": "Live Log Stream",
         "section.alerts": "Alerts",
+        "section.memoryInsights": "Memory Insights",
         "section.playbackRaat": "Playback & RAAT Events",
         "label.updated": "Updated:",
         "label.autoScroll": "Auto Scroll",
@@ -2334,7 +2818,42 @@ enum DashboardAssets {
         "memoryTrend.noData": "Waiting for memory samples",
         "memoryTrend.samples": "samples",
         "link.viewAllAlerts": "View all alerts...",
-        "link.viewAllEvents": "View all events...",
+        "link.viewAllMemoryInsights": "View week of memory insights...",
+        "link.viewAllEvents": "View all Playback & RAAT events...",
+        "collection.search": "Search...",
+        "collection.levelAll": "All levels",
+        "collection.showing": "Showing",
+        "collection.of": "of",
+        "collection.noRows": "No matching entries.",
+        "collection.alertsTitle": "All alerts",
+        "collection.alertsSummary": "Deduplicated warnings and critical entries from the current dashboard window.",
+        "collection.memoryTitle": "Memory analysis of the week",
+        "collection.memorySummary": "Detected Roon memory jumps from the last seven days with nearby log context.",
+        "collection.eventsTitle": "Playback & RAAT events",
+        "collection.eventsSummary": "Playback and RAAT events from the current dashboard snapshot.",
+        "collection.source": "Source",
+        "collection.type": "Type",
+        "collection.domain": "Domain",
+        "collection.zone": "Zone",
+        "collection.related": "Related log lines",
+        "memoryInsights.noData": "No memory jumps detected yet",
+        "memoryInsights.lastSevenDays": "last 7 days",
+        "memoryInsights.confidence": "confidence",
+        "memoryInsights.related": "related log lines",
+        "memoryInsights.window": "window",
+        "memoryInsights.beforeAfter": "physical",
+        "memoryInsights.increase": "Memory increase",
+        "memoryInsights.decrease": "Memory release",
+        "memoryInsights.category.startup": "Startup / warm-up",
+        "memoryInsights.category.metadata": "Metadata update",
+        "memoryInsights.category.library": "Library work",
+        "memoryInsights.category.streaming": "Streaming-service sync",
+        "memoryInsights.category.cache": "Cache / image work",
+        "memoryInsights.category.playback": "Playback / RAAT",
+        "memoryInsights.category.database": "Database activity",
+        "memoryInsights.category.network": "Network/API activity",
+        "memoryInsights.category.log": "Log warning",
+        "memoryInsights.category.unknown": "Unknown context",
         "settings.title": "Configuration",
         "settings.loadingPath": "Loading config path...",
         "settings.language": "Language",
@@ -2452,6 +2971,10 @@ enum DashboardAssets {
         "status.cleared": "Cleared",
         "status.sourcesSaved": "Sources saved",
         "status.sourcesReloaded": "Sources saved and reloaded",
+        "logs.noFilteredRows": "No log rows match the current filter.",
+        "logs.filteredRowsHidden": "log rows are available.",
+        "logs.changeLevelToAll": "Set Level to All to scroll them.",
+        "logs.displayLimit": "Showing newest rows",
         connected: "Connected",
         idle: "Idle",
         serverRoon: "Roon Server",
@@ -2492,10 +3015,13 @@ enum DashboardAssets {
         "action.settings": "Einstellungen",
         "action.manageSources": "Quellen verwalten...",
         "action.clear": "Leeren",
+        "action.pauseStream": "Livestream pausieren",
+        "action.resumeStream": "Livestream fortsetzen",
         "action.reload": "Neu laden",
         "action.saveConfig": "Config speichern",
         "action.copy": "Kopieren",
         "action.close": "Schließen",
+        "action.showAllLogs": "Alle anzeigen",
         "action.allSettings": "Alle Einstellungen",
         "action.saveSources": "Quellen speichern",
         "action.exportIncident": "Diagnose exportieren",
@@ -2504,6 +3030,7 @@ enum DashboardAssets {
         "section.memoryResources": "Speicher & Ressourcen",
         "section.liveLogStream": "Live-Logstream",
         "section.alerts": "Warnungen",
+        "section.memoryInsights": "Speicheranalyse",
         "section.playbackRaat": "Playback & RAAT-Ereignisse",
         "label.updated": "Aktualisiert:",
         "label.autoScroll": "Auto-Scroll",
@@ -2534,7 +3061,42 @@ enum DashboardAssets {
         "memoryTrend.noData": "Warte auf Speicherwerte",
         "memoryTrend.samples": "Proben",
         "link.viewAllAlerts": "Alle Warnungen anzeigen...",
-        "link.viewAllEvents": "Alle Ereignisse anzeigen...",
+        "link.viewAllMemoryInsights": "Speicheranalyse der Woche anzeigen...",
+        "link.viewAllEvents": "Alle Playback & RAAT-Ereignisse anzeigen...",
+        "collection.search": "Suchen...",
+        "collection.levelAll": "Alle Level",
+        "collection.showing": "Zeige",
+        "collection.of": "von",
+        "collection.noRows": "Keine passenden Einträge.",
+        "collection.alertsTitle": "Alle Warnungen",
+        "collection.alertsSummary": "Deduplizierte Warnungen und kritische Einträge aus dem aktuellen Dashboard-Fenster.",
+        "collection.memoryTitle": "Speicheranalyse der Woche",
+        "collection.memorySummary": "Erkannte Roon-Speichersprünge der letzten sieben Tage mit nahen Loghinweisen.",
+        "collection.eventsTitle": "Playback & RAAT-Ereignisse",
+        "collection.eventsSummary": "Playback- und RAAT-Ereignisse aus dem aktuellen Dashboard-Snapshot.",
+        "collection.source": "Quelle",
+        "collection.type": "Typ",
+        "collection.domain": "Bereich",
+        "collection.zone": "Zone",
+        "collection.related": "Zugehörige Logzeilen",
+        "memoryInsights.noData": "Noch keine Speichersprünge erkannt",
+        "memoryInsights.lastSevenDays": "letzte 7 Tage",
+        "memoryInsights.confidence": "Sicherheit",
+        "memoryInsights.related": "zugehörige Logzeilen",
+        "memoryInsights.window": "Fenster",
+        "memoryInsights.beforeAfter": "physisch",
+        "memoryInsights.increase": "Speicheranstieg",
+        "memoryInsights.decrease": "Speicherfreigabe",
+        "memoryInsights.category.startup": "Start / Warm-up",
+        "memoryInsights.category.metadata": "Metadaten-Update",
+        "memoryInsights.category.library": "Bibliotheksarbeit",
+        "memoryInsights.category.streaming": "Streaming-Dienst-Sync",
+        "memoryInsights.category.cache": "Cache / Bildverarbeitung",
+        "memoryInsights.category.playback": "Playback / RAAT",
+        "memoryInsights.category.database": "Datenbankaktivität",
+        "memoryInsights.category.network": "Netzwerk/API-Aktivität",
+        "memoryInsights.category.log": "Log-Warnung",
+        "memoryInsights.category.unknown": "Unklarer Kontext",
         "settings.title": "Konfiguration",
         "settings.loadingPath": "Config-Pfad wird geladen...",
         "settings.language": "Sprache",
@@ -2652,6 +3214,10 @@ enum DashboardAssets {
         "status.cleared": "Geleert",
         "status.sourcesSaved": "Quellen gespeichert",
         "status.sourcesReloaded": "Quellen gespeichert und neu geladen",
+        "logs.noFilteredRows": "Keine Logzeilen passen zum aktuellen Filter.",
+        "logs.filteredRowsHidden": "Logzeilen sind vorhanden.",
+        "logs.changeLevelToAll": "Stelle Level auf Alle, um sie zu scrollen.",
+        "logs.displayLimit": "Zeige neueste Zeilen",
         connected: "Verbunden",
         idle: "Inaktiv",
         serverRoon: "Roon Server",
@@ -2702,6 +3268,7 @@ enum DashboardAssets {
         "section.memoryResources": "Resource indicators derived from parsed Roon log metrics and local process sampling where available.",
         "section.liveLogStream": "The newest matching log lines. Filtering and pausing affect the visible stream, not the background watcher.",
         "section.alerts": "Deduplicated warnings and critical events extracted from logs. Counts are for the current in-memory dashboard window.",
+        "section.memoryInsights": "Detected Roon memory jumps from the last seven days, correlated with nearby log activity. This is a time-based clue, not a proven root cause.",
         "section.playbackRaat": "Playback and RAAT-related events inferred from log patterns, such as buffering, zone changes and RAAT reconnects.",
         "health.card": "Click the health card for details. The score starts at 100 and is reduced by active warning signals such as stale logs, RAAT instability, database issues, high memory or low disk space.",
         "health.score": "Overall inferred health score from 0 to 100. Higher is better; warning and critical log/system signals reduce the score.",
@@ -2789,6 +3356,7 @@ enum DashboardAssets {
         "section.memoryResources": "Ressourcenwerte aus geparsten Roon-Logmetriken und lokalen Prozessproben, soweit verfügbar.",
         "section.liveLogStream": "Die neuesten passenden Logzeilen. Filter und Pause betreffen nur die Anzeige, nicht den Hintergrund-Watcher.",
         "section.alerts": "Deduplizierte Warnungen und kritische Ereignisse aus den Logs. Die Zähler beziehen sich auf das aktuelle In-Memory-Fenster.",
+        "section.memoryInsights": "Erkannte Roon-Speichersprünge der letzten sieben Tage, zeitlich mit nahen Logaktivitäten korreliert. Das ist ein Hinweis, keine bewiesene Ursache.",
         "section.playbackRaat": "Playback- und RAAT-Ereignisse aus Logmustern, zum Beispiel Buffering, Zonenwechsel und RAAT-Reconnects.",
         "health.card": "Klicke die Health-Karte für Details. Der Score startet bei 100 und sinkt durch aktive Warnsignale wie veraltete Logs, RAAT-Probleme, Datenbankhinweise, hohen Speicher oder knappen Speicherplatz.",
         "health.score": "Abgeleiteter Gesamtzustand von 0 bis 100. Höher ist besser; Warnungen und kritische Log-/Systemsignale reduzieren den Score.",
@@ -2984,6 +3552,7 @@ enum DashboardAssets {
       ['[data-i18n="section.sources"]', "section.sources"],
       ['[data-i18n="section.memoryResources"]', "section.memoryResources"],
       ['[data-i18n="section.alerts"]', "section.alerts"],
+      ['[data-i18n="section.memoryInsights"]', "section.memoryInsights"],
       ['[data-i18n="section.playbackRaat"]', "section.playbackRaat"],
       ["#pauseStream", "logs.pause"],
       ['[data-i18n="label.level"]', "logs.level"],
@@ -3251,8 +3820,10 @@ enum DashboardAssets {
 
       const pause = document.getElementById("pauseStream");
       if (pause) {
-        pause.textContent = state.paused ? "▶" : "Ⅱ";
         pause.classList.toggle("is-paused", state.paused);
+        const label = state.paused ? t("action.resumeStream") : t("action.pauseStream");
+        pause.title = label;
+        pause.setAttribute("aria-label", label);
       }
 
       const auto = document.getElementById("autoScrollToggle");
@@ -3318,11 +3889,13 @@ enum DashboardAssets {
       renderMemoryTrend(snapshot);
       const visibleLogCount = renderLogs(logs);
       renderAlerts(alerts);
+      renderMemoryInsights(snapshot.memoryInsights || []);
       renderPlayback(playback);
       renderChart(chartData);
       updateStreamStatus(logs.length, visibleLogCount);
       renderSourcePanel(snapshot);
       renderHealthDetail(snapshot);
+      renderCollection(snapshot);
       maybeOpenSourcePrompt(snapshot);
     }
 
@@ -3760,6 +4333,7 @@ enum DashboardAssets {
         sources: snapshot.watchedSources || [],
         counters: snapshot.counters || {},
         alerts: snapshot.alerts || [],
+        memoryInsights: snapshot.memoryInsights || [],
         playback: snapshot.playback || [],
         logs,
         config: safeConfig
@@ -3956,14 +4530,20 @@ enum DashboardAssets {
     function renderLogs(logs) {
       const anchor = captureScrollAnchor();
       const filtered = filterLogItems(logs);
-      const rows = filtered.slice(0, 26);
+      const rows = filtered.slice(0, LOG_RENDER_LIMIT);
+      const hasHiddenRows = (logs || []).length > 0 && filtered.length === 0;
 
       state.visibleLogs = rows;
       state.filteredLogs = filtered;
       const body = document.getElementById("logRows");
       if (!body) return rows.length;
       if (!rows.length) {
-        body.innerHTML = `<tr><td class="empty-cell" colspan="4">${state.clearedThroughLogId ? t("waitingNewLogs") : t("waitingLogs")}</td></tr>`;
+        body.innerHTML = `<tr><td class="empty-cell" colspan="4">
+          <div class="empty-cell-content">
+            <strong>${escapeHTML(hasHiddenRows ? t("logs.noFilteredRows") : (state.clearedThroughLogId ? t("waitingNewLogs") : t("waitingLogs")))}</strong>
+            ${hasHiddenRows ? `<span>${Number(logs.length).toLocaleString(activeLocale())} ${escapeHTML(t("logs.filteredRowsHidden"))} ${escapeHTML(t("logs.changeLevelToAll"))}</span>` : ""}
+          </div>
+        </td></tr>`;
         hideLogDetail();
         return 0;
       }
@@ -4137,6 +4717,86 @@ enum DashboardAssets {
       }
     }
 
+    function memoryInsightCategoryLabel(category) {
+      const key = `memoryInsights.category.${category || "unknown"}`;
+      const translated = t(key);
+      return translated === key ? t("memoryInsights.category.unknown") : translated;
+    }
+
+    function memoryInsightWindow(seconds) {
+      const value = Number(seconds);
+      if (!Number.isFinite(value)) return "--";
+      if (value < 90) return `${Math.round(value)}s`;
+      return `${Math.round(value / 60)}m`;
+    }
+
+    function memoryInsightSentence(item) {
+      const direction = item.direction === "decrease" ? t("memoryInsights.decrease") : t("memoryInsights.increase");
+      const delta = formatSignedResource(item.deltaPhysicalMB, "MB");
+      const category = memoryInsightCategoryLabel(item.category);
+      const related = (item.relatedEvents || []).length;
+      if (state.language === "de") {
+        return `${direction} ${delta} bei ${category} (${related} ${t("memoryInsights.related")}).`;
+      }
+      return `${direction} ${delta} near ${category} (${related} ${t("memoryInsights.related")}).`;
+    }
+
+    function memoryInsightChip(label, value, unit = "MB") {
+      const number = Number(value);
+      if (!Number.isFinite(number) || Math.abs(number) < 0.5) return "";
+      return `<span class="memory-chip">${escapeHTML(label)} ${formatSignedResource(number, unit)}</span>`;
+    }
+
+    function renderMemoryInsights(insights) {
+      const items = Array.isArray(insights) ? insights : [];
+      const visibleIds = new Set(items.map(item => String(item.id || "")));
+      state.openMemoryInsightIds.forEach(id => {
+        if (!visibleIds.has(id)) state.openMemoryInsightIds.delete(id);
+      });
+      setText("memoryInsightCount", `${items.length} · ${t("memoryInsights.lastSevenDays")}`);
+      renderList("memoryInsightList", items, item => {
+        const insightId = String(item.id || "");
+        const direction = item.direction === "decrease" ? "decrease" : "increase";
+        const category = memoryInsightCategoryLabel(item.category);
+        const confidence = Math.max(0, Math.min(100, Math.round(Number(item.confidence || 0) * 100)));
+        const related = item.relatedEvents || [];
+        const evidence = related.slice(0, 5).map(event => `
+          <div class="memory-evidence-row">
+            <span>${fmtTime(event.time)}</span>
+            <span class="memory-chip">${escapeHTML(memoryInsightCategoryLabel(event.category))}</span>
+            <span>${escapeHTML(sourceName(event.source))}</span>
+            <p>${escapeHTML(event.message)}</p>
+          </div>
+        `).join("");
+        const detail = related.length ? `
+          <details class="memory-insight-evidence" data-memory-insight-id="${escapeHTML(insightId)}" ${state.openMemoryInsightIds.has(insightId) ? "open" : ""}>
+            <summary>${related.length} ${escapeHTML(t("memoryInsights.related"))}</summary>
+            <div class="memory-evidence-list">${evidence}</div>
+          </details>
+        ` : "";
+        return `
+          <article class="memory-insight-card ${direction}">
+            <div class="memory-insight-head">
+              <strong class="memory-insight-title">${escapeHTML(category)}</strong>
+              <span class="memory-insight-delta">${formatSignedResource(item.deltaPhysicalMB, "MB")}</span>
+            </div>
+            <p class="memory-insight-summary">${escapeHTML(memoryInsightSentence(item))}</p>
+            <div class="memory-insight-meta">
+              <span>${fmtTime(item.observedAt)}</span>
+              <span>${escapeHTML(t("memoryInsights.window"))}: ${memoryInsightWindow(item.windowSeconds)}</span>
+              <span>${confidence}% ${escapeHTML(t("memoryInsights.confidence"))}</span>
+            </div>
+            <div class="memory-insight-chips">
+              <span class="memory-chip">${escapeHTML(t("memoryInsights.beforeAfter"))}: ${formatResource(item.beforePhysicalMB, "MB")} -&gt; ${formatResource(item.afterPhysicalMB, "MB")}</span>
+              ${memoryInsightChip(t("managedMemory"), item.deltaManagedMB)}
+              ${memoryInsightChip(t("unmanaged"), item.deltaUnmanagedMB)}
+            </div>
+            ${detail}
+          </article>
+        `;
+      }, t("memoryInsights.noData"));
+    }
+
     function renderPlayback(events) {
       const fallback = events.length ? events : [];
       renderList("playbackList", fallback.slice(0, 6), item => `
@@ -4156,6 +4816,192 @@ enum DashboardAssets {
       if (String(type).includes("raat")) return "⌁";
       if (String(type).includes("buffer")) return "◌";
       return "♪";
+    }
+
+    function levelLabel(level) {
+      if (level === "critical") return "ERROR";
+      if (level === "warning") return "WARN";
+      if (level === "debug") return "DEBUG";
+      return "INFO";
+    }
+
+    function fmtDateTime(value) {
+      if (!value) return "--";
+      return new Date(value).toLocaleString(activeLocale(), {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+    }
+
+    function collectionPill(label, value) {
+      const text = String(value ?? "").trim();
+      if (!text) return "";
+      return `<span class="collection-pill">${escapeHTML(label)}: ${escapeHTML(text)}</span>`;
+    }
+
+    function collectionSearchText(kind, item) {
+      if (kind === "memory") {
+        const related = (item.relatedEvents || []).map(event => `${event.title || ""} ${event.message || ""} ${event.source || ""} ${event.category || ""}`).join(" ");
+        return [
+          item.category,
+          item.summary,
+          item.source,
+          item.direction,
+          memoryInsightCategoryLabel(item.category),
+          related
+        ].join(" ").toLowerCase();
+      }
+      return [
+        item.title,
+        item.message,
+        item.source,
+        item.domain,
+        item.type,
+        item.zone,
+        item.severity
+      ].join(" ").toLowerCase();
+    }
+
+    function collectionRows(kind, snapshot = state.lastSnapshot) {
+      if (!snapshot) return [];
+      if (kind === "alerts") return snapshot.alerts || [];
+      if (kind === "memory") return snapshot.memoryInsights || [];
+      if (kind === "events") return snapshot.playback || [];
+      return [];
+    }
+
+    function collectionConfig(kind) {
+      if (kind === "alerts") {
+        return {
+          title: t("collection.alertsTitle"),
+          summary: t("collection.alertsSummary"),
+          empty: t("noAlerts")
+        };
+      }
+      if (kind === "memory") {
+        return {
+          title: t("collection.memoryTitle"),
+          summary: t("collection.memorySummary"),
+          empty: t("memoryInsights.noData")
+        };
+      }
+      return {
+        title: t("collection.eventsTitle"),
+        summary: t("collection.eventsSummary"),
+        empty: t("noPlayback")
+      };
+    }
+
+    function openCollection(kind) {
+      state.collectionKind = kind;
+      state.collectionQuery = "";
+      state.collectionLevel = "all";
+      const panel = document.getElementById("collectionPanel");
+      if (panel) panel.hidden = false;
+      setValue("collectionSearch", "");
+      setValue("collectionLevelFilter", "all");
+      renderCollection();
+      document.getElementById("collectionSearch")?.focus({ preventScroll: true });
+    }
+
+    function closeCollection() {
+      const panel = document.getElementById("collectionPanel");
+      if (panel) panel.hidden = true;
+    }
+
+    function renderCollection(snapshot = state.lastSnapshot) {
+      const panel = document.getElementById("collectionPanel");
+      if (!panel || panel.hidden || !state.collectionKind) return;
+      const kind = state.collectionKind;
+      const config = collectionConfig(kind);
+      const allRows = collectionRows(kind, snapshot);
+      const query = state.collectionQuery.trim().toLowerCase();
+      const level = state.collectionLevel || "all";
+      const isMemory = kind === "memory";
+      const levelFilter = document.getElementById("collectionLevelFilter");
+      if (levelFilter) {
+        levelFilter.hidden = isMemory;
+        levelFilter.disabled = isMemory;
+      }
+
+      const filtered = allRows.filter(item => {
+        if (!isMemory && level !== "all" && alertLevel(item) !== level) return false;
+        if (!query) return true;
+        return collectionSearchText(kind, item).includes(query);
+      });
+
+      setText("collectionTitle", config.title);
+      setText("collectionSummary", `${config.summary} ${t("collection.showing")} ${filtered.length} ${t("collection.of")} ${allRows.length}.`);
+      setText("collectionCount", `${filtered.length}/${allRows.length}`);
+
+      const body = document.getElementById("collectionBody");
+      if (!body) return;
+      body.innerHTML = filtered.length
+        ? filtered.map(item => isMemory ? renderCollectionMemoryRow(item) : renderCollectionEventRow(item)).join("")
+        : `<div class="empty">${escapeHTML(query || level !== "all" ? t("collection.noRows") : config.empty)}</div>`;
+    }
+
+    function renderCollectionEventRow(item) {
+      const level = alertLevel(item);
+      return `
+        <article class="collection-card-row ${escapeHTML(level)}">
+          <div class="collection-row-head">
+            <span class="level-badge level-${level}">${levelLabel(level)}</span>
+            <strong>${escapeHTML(item.title || levelLabel(level))}</strong>
+            <time>${fmtDateTime(item.time)}</time>
+          </div>
+          <div class="collection-meta">
+            ${collectionPill(t("collection.domain"), item.domain)}
+            ${collectionPill(t("collection.type"), item.type)}
+            ${collectionPill(t("collection.source"), sourceName(item.source))}
+            ${collectionPill(t("collection.zone"), item.zone)}
+          </div>
+          <pre class="collection-message">${escapeHTML(item.message || "")}</pre>
+        </article>
+      `;
+    }
+
+    function renderCollectionMemoryRow(item) {
+      const direction = item.direction === "decrease" ? "decrease" : "increase";
+      const category = memoryInsightCategoryLabel(item.category);
+      const confidence = Math.max(0, Math.min(100, Math.round(Number(item.confidence || 0) * 100)));
+      const related = item.relatedEvents || [];
+      const detailId = `memory-${String(item.id || "")}`;
+      const evidence = related.map(event => `
+        <div class="memory-evidence-row">
+          <span>${fmtDateTime(event.time)}</span>
+          <span class="memory-chip">${escapeHTML(memoryInsightCategoryLabel(event.category))}</span>
+          <span>${escapeHTML(sourceName(event.source))}</span>
+          <p>${escapeHTML(event.message || event.title || "")}</p>
+        </div>
+      `).join("");
+      return `
+        <article class="collection-card-row memory-${direction}">
+          <div class="collection-row-head">
+            <span class="level-badge level-${direction === "decrease" ? "info" : "warning"}">${direction === "decrease" ? "MEM" : "JUMP"}</span>
+            <strong>${escapeHTML(category)} · ${formatSignedResource(item.deltaPhysicalMB, "MB")}</strong>
+            <time>${fmtDateTime(item.observedAt)}</time>
+          </div>
+          <p class="collection-summary">${escapeHTML(memoryInsightSentence(item))}</p>
+          <div class="collection-meta">
+            ${collectionPill(t("collection.source"), sourceName(item.source))}
+            ${collectionPill(t("memoryInsights.window"), memoryInsightWindow(item.windowSeconds))}
+            ${collectionPill(t("memoryInsights.confidence"), `${confidence}%`)}
+            ${collectionPill(t("memoryInsights.beforeAfter"), `${formatResource(item.beforePhysicalMB, "MB")} -> ${formatResource(item.afterPhysicalMB, "MB")}`)}
+            ${memoryInsightChip(t("managedMemory"), item.deltaManagedMB)}
+            ${memoryInsightChip(t("unmanaged"), item.deltaUnmanagedMB)}
+          </div>
+          ${related.length ? `
+            <details class="collection-evidence" data-collection-detail-id="${escapeHTML(detailId)}" ${state.openCollectionDetailIds.has(detailId) ? "open" : ""}>
+              <summary>${related.length} ${escapeHTML(t("collection.related"))}</summary>
+              <div class="collection-evidence-list">${evidence}</div>
+            </details>
+          ` : ""}
+        </article>
+      `;
     }
 
     function isServerVolumeBucket(item) {
@@ -4275,21 +5121,33 @@ enum DashboardAssets {
     }
 
     document.addEventListener("input", event => {
-      if (event.target?.id === "levelFilter") {
+      const targetId = event.target?.id;
+      if (targetId === "levelFilter") {
         state.level = event.target.value;
         saveUIState();
       }
-      if (event.target?.id === "searchInput") state.query = event.target.value;
-      if (event.target?.id === "regexInput") state.query = document.getElementById("searchInput")?.value || "";
-      if (event.target?.id === "configLanguage") {
+      if (targetId === "searchInput") state.query = event.target.value;
+      if (targetId === "regexInput") state.query = document.getElementById("searchInput")?.value || "";
+      if (targetId === "collectionSearch") {
+        state.collectionQuery = event.target.value;
+        renderCollection();
+        return;
+      }
+      if (targetId === "collectionLevelFilter") {
+        state.collectionLevel = event.target.value;
+        renderCollection();
+        return;
+      }
+      if (targetId === "configLanguage") {
         state.language = event.target.value;
         applyI18n();
+        renderCollection();
         setText("settingsStatus", "");
       }
-      if (event.target?.id === "chartRange" || event.target?.id === "configVolumeWindow") {
+      if (targetId === "chartRange" || targetId === "configVolumeWindow") {
         setVolumeWindow(event.target.value);
       }
-      if (state.lastSnapshot && ["levelFilter", "searchInput", "regexInput"].includes(event.target?.id)) {
+      if (state.lastSnapshot && ["levelFilter", "searchInput", "regexInput"].includes(targetId)) {
         render(state.lastSnapshot);
       } else {
         refresh();
@@ -4300,6 +5158,10 @@ enum DashboardAssets {
       if (event.target?.id === "chartRange" || event.target?.id === "configVolumeWindow") {
         setVolumeWindow(event.target.value);
         refresh();
+      }
+      if (event.target?.id === "collectionLevelFilter") {
+        state.collectionLevel = event.target.value;
+        renderCollection();
       }
       if (event.target?.id === "autoScrollToggle") {
         state.autoScroll = event.target.checked;
@@ -4332,6 +5194,27 @@ enum DashboardAssets {
     document.addEventListener("scroll", () => hideHelpTooltip({ force: true }), true);
     window.addEventListener("resize", () => hideHelpTooltip({ force: true }));
 
+    document.addEventListener("toggle", event => {
+      const collectionDetails = event.target?.closest?.(".collection-evidence");
+      const collectionId = collectionDetails?.dataset?.collectionDetailId;
+      if (collectionId) {
+        if (collectionDetails.open) {
+          state.openCollectionDetailIds.add(collectionId);
+        } else {
+          state.openCollectionDetailIds.delete(collectionId);
+        }
+        return;
+      }
+      const details = event.target?.closest?.(".memory-insight-evidence");
+      const id = details?.dataset?.memoryInsightId;
+      if (!id) return;
+      if (details.open) {
+        state.openMemoryInsightIds.add(id);
+      } else {
+        state.openMemoryInsightIds.delete(id);
+      }
+    }, true);
+
     document.addEventListener("click", event => {
       const helpIcon = event.target?.closest?.(".help-icon");
       if (helpIcon) {
@@ -4363,6 +5246,11 @@ enum DashboardAssets {
         const item = state.visibleLogs.find(log => log.id === id);
         if (item) renderLogDetail(item);
       }
+      const collectionButton = event.target?.closest?.("[data-open-collection]");
+      if (collectionButton) {
+        event.preventDefault();
+        openCollection(collectionButton.dataset.openCollection || "events");
+      }
       if (event.target?.id === "clearSearch") {
         state.query = "";
         state.clearedThroughLogId = state.lastSnapshot?.recentLogs?.[0]?.id || state.clearedThroughLogId || 0;
@@ -4372,7 +5260,7 @@ enum DashboardAssets {
         if (input) input.value = "";
         if (state.lastSnapshot) render(state.lastSnapshot);
       }
-      if (event.target?.id === "pauseStream") {
+      if (event.target?.closest?.("#pauseStream")) {
         togglePaused();
       }
       if (event.target?.id === "openSettings") {
@@ -4395,6 +5283,12 @@ enum DashboardAssets {
       }
       if (event.target?.id === "closeSources") {
         closeSources();
+      }
+      if (event.target?.id === "closeCollection") {
+        closeCollection();
+      }
+      if (event.target?.id === "collectionPanel") {
+        closeCollection();
       }
       if (event.target?.id === "openSettingsFromSources") {
         closeSources();
@@ -4422,6 +5316,12 @@ enum DashboardAssets {
           })
           .catch(error => setText("settingsStatus", `Reload failed: ${error.message}`));
       }
+    });
+
+    document.addEventListener("keydown", event => {
+      if (event.key !== "Escape") return;
+      const collectionPanel = document.getElementById("collectionPanel");
+      if (collectionPanel && !collectionPanel.hidden) closeCollection();
     });
 
     document.addEventListener("submit", event => {
