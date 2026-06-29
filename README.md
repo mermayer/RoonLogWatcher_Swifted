@@ -253,3 +253,68 @@ The main health-rule defaults are:
 ```bash
 swift test
 ```
+
+## Changelog
+
+### [v0.1.3](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.1.3) - Memory Insights and Dashboard Views - 2026-06-28
+
+- Added the **Memory Insights** section with seven-day persistent memory-jump
+  analysis, confidence values, sample windows and related Roon log context.
+- Replaced raw `/api/snapshot` sidebar links with structured dashboard panels
+  for alerts, weekly memory insights and Playback & RAAT events.
+- Scoped the Playback & RAAT full view to playback/RAAT events only, excluding
+  unrelated system, memory and generic timeline entries.
+- Preserved expanded related-log sections across live dashboard refreshes.
+- Improved the live-log toolbar with a graphical pause/resume button, removed
+  the unused three-dot button and tightened the center/right layout.
+- Extended the 24-hour Roon memory trend and improved memory/resource handling,
+  including open-file sampling behavior on macOS.
+- Further reduced health-score noise by weighting transient Roon playback, RAAT
+  and database messages more conservatively.
+
+### [v0.1.2](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.1.2) - System Resource Sampling Fixes - 2026-06-25
+
+- Fixed local Roon process detection on macOS for RAATServer, RoonServer and
+  RoonAppliance.
+- Fixed CPU and Roon process memory reporting in Health Details and the resource
+  panel.
+- Added valid open-file descriptor sampling via macOS process APIs with an
+  `lsof` fallback.
+- Removed hard-coded placeholder values for CPU, I/O wait and open files.
+  Unavailable I/O wait now shows `--`.
+- Extended 24-hour Roon memory trend retention so dense stats lines no longer
+  collapse the visible history to only a few hours.
+- Updated README and dashboard help text for optional or unavailable macOS
+  resource values.
+
+### [v0.1.1](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.1.1) - Dashboard and Health Refinements - 2026-06-23
+
+- Added documentation for remote dashboard access from other systems on the same
+  network.
+- Added the MIT license and expanded README coverage for monitored resources,
+  Roon Health scoring, weighted log classification and screenshots.
+- Added and widened the 24-hour Roon memory trend in the live-log header.
+- Changed the default live-log level filter to `Warnings + Critical` and added
+  the combined filter option.
+- Improved alert retention and detail handling for warning and critical entries.
+- Excluded rotated log archives from live tailing by default and cleaned up old
+  watched-source state.
+- Reduced health-score impact from isolated playback buffering, timeout and RAAT
+  reconnect activity.
+- Lowered severity for common non-critical Roon operational messages and refined
+  memory threshold handling.
+- Reduced dashboard snapshot size and verified lower runtime CPU and memory use.
+
+### [v0.1.0](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.1.0) - Initial macOS Release - 2026-06-23
+
+- Initial Swift/macOS release based on the original
+  [`stefanmauron/roon-log-watcher`](https://github.com/stefanmauron/roon-log-watcher)
+  project.
+- Added a native macOS menu bar app with a browser dashboard for local or remote
+  monitoring on the configured dashboard port.
+- Added automatic and manual Roon log source discovery.
+- Added live log stream filtering, severity highlighting and log export.
+- Added weighted Roon Health scoring across log, playback, RAAT, database,
+  memory, process and disk signals.
+- Added Roon Health details, dashboard configuration and demo mode.
+- Added bounded in-memory log/history handling to keep resource use controlled.
