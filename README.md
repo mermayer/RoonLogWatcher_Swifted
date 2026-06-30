@@ -80,9 +80,9 @@ The watcher combines log-derived events with local system signals:
 - Database signals: corruption, malformed SQLite image, locked database,
   SQLite busy, slow query, timeout, rollback and maintenance completion.
 - Local host status: likely Roon host detection, matching Roon processes, CPU,
-  resident memory, optional open-file counts and log-volume free space. Values
-  macOS does not expose are shown as `--`; per-process I/O wait is not sampled
-  yet.
+  resident memory, system swap usage, Roon Disk I/O, optional open-file counts
+  and log-volume free space. Values macOS does not expose are shown as `--`;
+  synthetic placeholder values are avoided.
 - Dashboard state: retained recent logs, exportable log history, deduplicated
   alerts, playback/RAAT timeline, log-volume buckets, health trend samples and
   24-hour memory trend samples, plus seven days of memory-jump insights.
@@ -154,17 +154,26 @@ Default signal weights:
 | RAAT | latest state disconnected | 12 |
 | Playback | timeout/failure warning burst | up to 24 |
 | Playback | heavy repeated playback instability | up to 32 |
-| Memory | near threshold at 92% / over threshold | 12 / 28 |
-| Memory | growth over the configured window | 18 |
+| Memory | near threshold at 92% / over threshold without macOS pressure | 0 |
+| Memory | near threshold with swap pressure | 8 |
+| Memory | over threshold with swap pressure or high system share | 12 / 28 |
+| Memory | growth over the configured window without pressure / with pressure | 0 / 14 |
 | System | high Roon process CPU | 14 |
-| System | high Roon process memory | 14 |
+| System | high Roon process memory without pressure / with pressure | 0 / 14 |
+| System | macOS swap warning / critical | 24 / 42 |
 | Disk | low / critical free log-volume space | 14 / 34 |
 
 The important detail is that not every Roon `Error` text is treated as equally
-dangerous. A plain playback buffering line, image fetch retry or transient
-SQLite busy message should not collapse the score to zero. The evaluator looks at
-the parsed domain, severity, recency and repetition window before assigning
-impact.
+dangerous. A plain playback buffering line, image fetch retry, transient SQLite
+busy message or a track title containing words such as `Crash` should not
+collapse the score to zero. Memory is also weighted against real macOS pressure:
+high Roon memory alone is treated as an observation when swap usage is low and
+the system still has headroom.
+
+Swap is the strongest memory-pressure signal. By default, macOS swap usage of
+about `256 MB` or `10%` is warning-level; about `1024 MB` or `50%` is critical.
+Roon process memory becomes health-relevant when it represents a very high share
+of physical RAM, or when swap pressure is already visible.
 
 ## Log Message Weighting
 
@@ -192,6 +201,10 @@ warning-level by default and become critical only after a much larger repeated
 burst. RAAT transport interruptions use warning and critical disconnect counts.
 Database corruption is immediately critical, while SQLite busy/locked activity is
 warning-level and capped.
+
+Playback status lines are parsed before generic server-error fallbacks. This
+prevents normal track metadata such as a song title containing `Crash` from being
+mistaken for a Roon server crash.
 
 ## Configuration
 
@@ -255,6 +268,23 @@ swift test
 ```
 
 ## Changelog
+
+### [v0.1.4](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.1.4) - Smarter Memory Pressure and Disk I/O - 2026-06-30
+
+- Reworked memory health evaluation so high Roon memory alone is informational
+  when macOS swap pressure is low and the system still has headroom.
+- Added macOS swap sampling to Health Details and the resource panel; significant
+  swap usage now drives the strongest memory-related Health warnings.
+- Replaced the placeholder I/O wait row with real **Roon Disk I/O** throughput
+  derived from macOS per-process resource counters.
+- Added per-process read/write Disk I/O rates to local system snapshots and
+  Health Details.
+- Fixed playback status parsing so track titles such as `Crash` are not
+  misclassified as Roon server crashes.
+- Improved alert-detail layout in the right sidebar so long warning/error text
+  stays readable without covering the list.
+- Added tests for smarter memory pressure scoring, swap escalation, Roon Disk I/O
+  sampling and playback-title crash classification.
 
 ### [v0.1.3](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.1.3) - Memory Insights and Dashboard Views - 2026-06-28
 

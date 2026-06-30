@@ -201,9 +201,68 @@ final class LogParserTests: XCTestCase {
         )
 
         let signal = store.snapshot().health.signals.first { $0.id == "memory.managed_near_threshold" }
-        XCTAssertEqual(signal?.severity, .warning)
+        XCTAssertEqual(signal?.severity, .info)
         XCTAssertEqual(signal?.valueMB, 1105)
         XCTAssertEqual(signal?.thresholdMB, 1200)
+        XCTAssertEqual(store.snapshot().health.score, 100)
+    }
+
+    func testManagedMemoryOverThresholdWithoutSwapDoesNotLowerHealth() {
+        let parser = LogParser()
+        var configuration = AppConfiguration.default
+        configuration.memoryAlerts.managedMemoryMB = 1200
+        let store = RuntimeStore(configuration: configuration)
+        store.updateSystemStatus(localSystemStatus(totalMemoryMB: 2_400, swapUsedMB: 4, swapTotalMB: 1_024))
+        let line = "Info: [stats] 1220 MB Managed"
+
+        store.ingest(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: line,
+            events: parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line),
+            mode: .live
+        )
+
+        let snapshot = store.snapshot()
+        let signal = snapshot.health.signals.first { $0.id == "memory.managed_high" }
+        XCTAssertEqual(signal?.severity, .info)
+        XCTAssertEqual(signal?.impact, 0)
+        XCTAssertEqual(snapshot.health.score, 100)
+        XCTAssertEqual(snapshot.health.state, .healthy)
+    }
+
+    func testSystemSwapUsageCreatesMemoryWarning() {
+        let store = RuntimeStore()
+        store.updateSystemStatus(localSystemStatus(totalMemoryMB: 2_400, swapUsedMB: 512, swapTotalMB: 2_048))
+
+        store.ingest(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: "06/30 09:00:00 Info: alive",
+            events: [],
+            mode: .live
+        )
+
+        let snapshot = store.snapshot()
+        let signal = snapshot.health.signals.first { $0.id == "system.swap.used" }
+        XCTAssertEqual(signal?.severity, .warning)
+        XCTAssertEqual(signal?.valueMB, 512)
+        XCTAssertEqual(snapshot.health.state, .degraded)
+    }
+
+    func testHighSwapRatioCreatesCriticalHealthSignal() {
+        let store = RuntimeStore()
+        store.updateSystemStatus(localSystemStatus(totalMemoryMB: 2_400, swapUsedMB: 800, swapTotalMB: 1_024))
+
+        store.ingest(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: "06/30 09:00:00 Info: alive",
+            events: [],
+            mode: .live
+        )
+
+        let snapshot = store.snapshot()
+        let signal = snapshot.health.signals.first { $0.id == "system.swap.critical" }
+        XCTAssertEqual(signal?.severity, .critical)
+        XCTAssertEqual(snapshot.health.state, .critical)
     }
 
     func testParsesPlainPlaybackBufferingAsNoticeWithZone() {
@@ -225,6 +284,28 @@ final class LogParserTests: XCTestCase {
         )
 
         XCTAssertTrue(events.contains { $0.type == "playback.warning.detected" && $0.zone == "Living Room" && $0.severity == .warning })
+    }
+
+    func testPlaybackTrackTitleCrashDoesNotBecomeServerError() {
+        let parser = LogParser()
+        let events = parser.parse(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: "06/29 16:23:58 Trace: [WiiM Ultra] [Enhanced, 16/44 TIDAL FLAC => 32/44] [100% buf] [PLAYING @ 3:38/4:38] Crash - Above & Beyond"
+        )
+
+        XCTAssertTrue(events.contains { $0.domain == "playback" && $0.type == "playback.playing" && $0.severity == .info })
+        XCTAssertFalse(events.contains { $0.domain == "server" })
+        XCTAssertFalse(events.contains { $0.severity == .warning || $0.severity == .critical })
+    }
+
+    func testActualServerCrashStillBecomesCritical() {
+        let parser = LogParser()
+        let events = parser.parse(
+            file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
+            line: "06/29 16:23:58 Error: RoonServer crash detected while starting server"
+        )
+
+        XCTAssertTrue(events.contains { $0.domain == "server" && $0.type == "server.exception" && $0.severity == .critical })
     }
 
     func testParsesDatabaseLockAsTransientNotice() {
@@ -598,17 +679,42 @@ final class LogParserTests: XCTestCase {
         49898 1.4 2153360 /Applications/Roon.app/Contents/RoonServer.app/Contents/RoonAppliance.app/Contents/MacOS/RoonAppliance
         49900 0.0 592 /Applications/Roon.app/Contents/RoonServer.app/Contents/MonoBundle/processreaper 49898
         """
+        let baseDate = Date()
+        let mib = UInt64(1_048_576)
+        var diskSampleIndex = 0
         let sampler = LocalSystemSampler(
             processListingProvider: { listing },
-            openFileCountProvider: { pid in pid == 49898 ? 123 : 7 }
+            openFileCountProvider: { pid in pid == 49898 ? 123 : 7 },
+            diskIOProvider: { pid in
+                let multiplier: UInt64
+                switch pid {
+                case 49889, 49890: multiplier = 1
+                case 49898: multiplier = 2
+                default: return nil
+                }
+                let readMB = diskSampleIndex == 0 ? 10 * multiplier : 40 * multiplier
+                let writeMB = diskSampleIndex == 0 ? 5 * multiplier : 15 * multiplier
+                return (readBytes: readMB * mib, writeBytes: writeMB * mib)
+            },
+            swapUsageProvider: { (totalMB: 2_048, usedMB: 128, freeMB: 1_920) },
+            nowProvider: { baseDate.addingTimeInterval(TimeInterval(diskSampleIndex * 30)) }
         )
 
+        let initialStatus = sampler.sample(discoverer: RoonLogDiscoverer(environment: [:]), includeOpenFiles: true)
+        XCTAssertNil(initialStatus.totalDiskReadRateMBps)
+
+        diskSampleIndex = 1
         let status = sampler.sample(discoverer: RoonLogDiscoverer(environment: [:]), includeOpenFiles: true)
 
         XCTAssertEqual(status.processes.map(\.name), ["RAATServer", "RoonServer", "RoonAppliance"])
         XCTAssertEqual(status.totalCPUPercent, 1.5, accuracy: 0.01)
         XCTAssertEqual(status.totalMemoryMB, Double(56912 + 94256 + 2153360) / 1024, accuracy: 0.01)
         XCTAssertEqual(status.openFileCount, 137)
+        XCTAssertEqual(status.totalDiskReadRateMBps ?? 0, 4.0, accuracy: 0.001)
+        XCTAssertEqual(status.totalDiskWriteRateMBps ?? 0, 4.0 / 3.0, accuracy: 0.001)
+        XCTAssertEqual(status.processes.first { $0.name == "RoonAppliance" }?.diskReadRateMBps ?? 0, 2.0, accuracy: 0.001)
+        XCTAssertEqual(status.swapUsedMB, 128)
+        XCTAssertEqual(status.swapUsedRatio ?? 0, 0.0625, accuracy: 0.0001)
         XCTAssertFalse(status.processes.contains { $0.name == "RoonLogWatcher" || $0.path.contains("processreaper") })
     }
 
@@ -637,6 +743,45 @@ final class LogParserTests: XCTestCase {
             source: "RoonServer/RoonServer_log.txt",
             valueMB: valueMB,
             zone: nil
+        )
+    }
+
+    private func localSystemStatus(
+        totalMemoryMB: Double,
+        totalPhysicalMemoryMB: Double = 16_384,
+        swapUsedMB: Double,
+        swapTotalMB: Double
+    ) -> LocalSystemStatus {
+        LocalSystemStatus(
+            sampledAt: Date(),
+            host: RoonHostStatus(
+                isRoonServerLikely: true,
+                reason: "test",
+                detectedProcesses: ["RoonAppliance"],
+                detectedLogDirectories: ["/tmp/RoonServer/Logs"],
+                checkedAt: Date()
+            ),
+            processes: [
+                RoonProcessStatus(
+                    pid: 123,
+                    name: "RoonAppliance",
+                    path: "/Applications/Roon.app/Contents/RoonServer.app/Contents/RoonAppliance.app/Contents/MacOS/RoonAppliance",
+                    cpuPercent: 1.0,
+                    memoryMB: totalMemoryMB,
+                    openFiles: nil
+                )
+            ],
+            totalCPUPercent: 1.0,
+            totalMemoryMB: totalMemoryMB,
+            totalPhysicalMemoryMB: totalPhysicalMemoryMB,
+            openFileCount: nil,
+            swapTotalMB: swapTotalMB,
+            swapUsedMB: swapUsedMB,
+            swapFreeMB: max(0, swapTotalMB - swapUsedMB),
+            swapUsedRatio: swapTotalMB > 0 ? swapUsedMB / swapTotalMB : nil,
+            logVolumePath: nil,
+            logVolumeFreeMB: nil,
+            logVolumeFreeRatio: nil
         )
     }
 

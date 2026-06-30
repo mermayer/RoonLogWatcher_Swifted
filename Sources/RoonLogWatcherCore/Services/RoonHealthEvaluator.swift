@@ -3,6 +3,12 @@ import Foundation
 struct RoonHealthEvaluator {
     var configuration: AppConfiguration
     private let memoryNearThresholdRatio = 0.92
+    private let swapWarningMB = 256.0
+    private let swapCriticalMB = 1_024.0
+    private let swapWarningRatio = 0.10
+    private let swapCriticalRatio = 0.50
+    private let roonMemoryShareWarningRatio = 0.35
+    private let roonMemoryShareCriticalRatio = 0.55
 
     func evaluate(
         now: Date,
@@ -27,7 +33,7 @@ struct RoonHealthEvaluator {
         evaluateDatabase(now: now, events: events, rules: rules, into: &signals)
         evaluateRaat(now: now, events: events, rules: rules, into: &signals)
         evaluatePlayback(now: now, events: events, rules: rules, into: &signals)
-        evaluateMemory(now: now, memory: memory, memoryHistory: memoryHistory, into: &signals)
+        evaluateMemory(now: now, memory: memory, memoryHistory: memoryHistory, system: system, into: &signals)
         evaluateSystem(system, rules: rules, into: &signals)
         evaluateDisk(now: now, sources: sources, system: system, rules: rules, into: &signals)
 
@@ -372,6 +378,7 @@ struct RoonHealthEvaluator {
         now: Date,
         memory: [MemoryMetric],
         memoryHistory: [MemoryMetric],
+        system: LocalSystemStatus?,
         into signals: inout [RoonHealthSignal]
     ) {
         guard configuration.memoryAlerts.enabled else { return }
@@ -380,31 +387,35 @@ struct RoonHealthEvaluator {
             "Managed Memory": configuration.memoryAlerts.managedMemoryMB,
             "Unmanaged Memory": configuration.memoryAlerts.unmanagedMemoryMB
         ]
+        let swapSeverity = swapPressureSeverity(system)
+        let processShareSeverity = roonMemoryShareSeverity(system)
 
         for metric in memory {
             guard let threshold = thresholds[metric.metric] else { continue }
             let signalIDs = memorySignalIDs(for: metric.metric)
             if metric.valueMB >= threshold {
+                let severity = memoryThresholdSeverity(swapSeverity: swapSeverity, processShareSeverity: processShareSeverity)
                 signals.append(signal(
                     id: signalIDs.high,
                     domain: "memory",
-                    severity: .critical,
+                    severity: severity,
                     title: "\(metric.metric) over threshold",
-                    message: "\(metric.metric) is above the configured threshold.",
-                    impact: 28,
+                    message: memoryThresholdMessage(metric: metric.metric, severity: severity),
+                    impact: memoryThresholdImpact(severity),
                     observedAt: metric.updatedAt,
                     valueMB: metric.valueMB,
                     thresholdMB: threshold,
                     source: metric.source
                 ))
             } else if metric.valueMB >= threshold * memoryNearThresholdRatio {
+                let severity: Severity = swapSeverity == nil ? .info : .warning
                 signals.append(signal(
                     id: signalIDs.near,
                     domain: "memory",
-                    severity: .warning,
+                    severity: severity,
                     title: "\(metric.metric) near threshold",
-                    message: "\(metric.metric) is within \(Int(((1 - memoryNearThresholdRatio) * 100).rounded()))% of the configured threshold.",
-                    impact: 12,
+                    message: memoryNearThresholdMessage(metric: metric.metric, severity: severity),
+                    impact: severity == .warning ? 8 : 0,
                     observedAt: metric.updatedAt,
                     valueMB: metric.valueMB,
                     thresholdMB: threshold,
@@ -424,13 +435,16 @@ struct RoonHealthEvaluator {
             else { continue }
             let delta = last.valueMB - first.valueMB
             if delta >= configuration.memoryAlerts.growthThresholdMB {
+                let threshold = thresholds[metricName] ?? .greatestFiniteMagnitude
+                let latestNearThreshold = last.valueMB >= threshold * memoryNearThresholdRatio
+                let severity: Severity = (swapSeverity != nil || (latestNearThreshold && processShareSeverity != nil)) ? .warning : .info
                 signals.append(signal(
                     id: "memory.growth",
                     domain: "memory",
-                    severity: .warning,
+                    severity: severity,
                     title: "Memory growth detected",
-                    message: "\(metricName) grew by \(Int(delta.rounded())) MB.",
-                    impact: 18,
+                    message: memoryGrowthMessage(metric: metricName, delta: delta, severity: severity),
+                    impact: severity == .warning ? 14 : 0,
                     observedAt: last.updatedAt,
                     valueMB: last.valueMB,
                     deltaMB: delta,
@@ -452,6 +466,52 @@ struct RoonHealthEvaluator {
         default:
             return ("memory.high", "memory.near_threshold")
         }
+    }
+
+    private func memoryThresholdSeverity(swapSeverity: Severity?, processShareSeverity: Severity?) -> Severity {
+        if swapSeverity == .critical || processShareSeverity == .critical {
+            return .critical
+        }
+        if swapSeverity == .warning || processShareSeverity == .warning {
+            return .warning
+        }
+        return .info
+    }
+
+    private func memoryThresholdImpact(_ severity: Severity) -> Int {
+        switch severity {
+        case .critical: return 28
+        case .warning: return 12
+        case .info: return 0
+        }
+    }
+
+    private func memoryThresholdMessage(metric: String, severity: Severity) -> String {
+        switch severity {
+        case .critical:
+            return "\(metric) is above the configured threshold while the system is under memory pressure."
+        case .warning:
+            return "\(metric) is above the configured threshold and system pressure or process share makes it relevant."
+        case .info:
+            return "\(metric) is above the configured threshold, but macOS is not reporting meaningful swap pressure."
+        }
+    }
+
+    private func memoryNearThresholdMessage(metric: String, severity: Severity) -> String {
+        switch severity {
+        case .critical, .warning:
+            return "\(metric) is near the configured threshold while system memory pressure is present."
+        case .info:
+            return "\(metric) is near the configured threshold; this is treated as observation without system memory pressure."
+        }
+    }
+
+    private func memoryGrowthMessage(metric: String, delta: Double, severity: Severity) -> String {
+        let roundedDelta = Int(delta.rounded())
+        if severity == .warning {
+            return "\(metric) grew by \(roundedDelta) MB while memory pressure indicators are active."
+        }
+        return "\(metric) grew by \(roundedDelta) MB, but no system memory pressure is currently visible."
     }
 
     private func evaluateSystem(_ system: LocalSystemStatus?, rules: HealthRuleConfiguration, into signals: inout [RoonHealthSignal]) {
@@ -483,18 +543,106 @@ struct RoonHealthEvaluator {
             ))
         }
 
+        evaluateSwap(system, into: &signals)
+
         if system.totalMemoryMB >= rules.processMemoryWarningMB {
+            let severity = roonMemoryShareSeverity(system) ?? swapPressureSeverity(system) ?? .info
             signals.append(signal(
-                id: "system.memory.high",
+                id: severity == .info ? "system.memory.observed" : "system.memory.high",
                 domain: "system",
-                severity: .warning,
+                severity: severity,
                 title: "High Roon process memory",
-                message: "Roon processes are above the memory threshold.",
-                impact: 14,
+                message: processMemoryMessage(for: system, severity: severity),
+                impact: severity == .critical ? 28 : (severity == .warning ? 14 : 0),
                 observedAt: system.sampledAt,
                 valueMB: system.totalMemoryMB,
                 thresholdMB: rules.processMemoryWarningMB
             ))
+        }
+    }
+
+    private func evaluateSwap(_ system: LocalSystemStatus, into signals: inout [RoonHealthSignal]) {
+        guard let swapUsedMB = system.swapUsedMB else { return }
+        let severity = swapPressureSeverity(system)
+
+        guard let severity else {
+            signals.append(signal(
+                id: "system.swap.ok",
+                domain: "system",
+                severity: .info,
+                title: "System swap low",
+                message: "macOS swap usage is currently low.",
+                impact: 0,
+                observedAt: system.sampledAt,
+                valueMB: swapUsedMB,
+                thresholdMB: swapWarningMB
+            ))
+            return
+        }
+
+        signals.append(signal(
+            id: severity == .critical ? "system.swap.critical" : "system.swap.used",
+            domain: "system",
+            severity: severity,
+            title: severity == .critical ? "System swap critical" : "System swap in use",
+            message: swapMessage(for: system, severity: severity),
+            impact: severity == .critical ? 42 : 24,
+            observedAt: system.sampledAt,
+            valueMB: swapUsedMB,
+            thresholdMB: severity == .critical ? swapCriticalMB : swapWarningMB
+        ))
+    }
+
+    private func swapPressureSeverity(_ system: LocalSystemStatus?) -> Severity? {
+        guard let system, let usedMB = system.swapUsedMB else { return nil }
+        let ratio = system.swapUsedRatio ?? 0
+        if usedMB >= swapCriticalMB || ratio >= swapCriticalRatio {
+            return .critical
+        }
+        if usedMB >= swapWarningMB || ratio >= swapWarningRatio {
+            return .warning
+        }
+        return nil
+    }
+
+    private func roonMemoryShareSeverity(_ system: LocalSystemStatus?) -> Severity? {
+        guard let system,
+              let physicalMB = system.totalPhysicalMemoryMB,
+              physicalMB > 0
+        else { return nil }
+        let ratio = system.totalMemoryMB / physicalMB
+        if ratio >= roonMemoryShareCriticalRatio {
+            return .critical
+        }
+        if ratio >= roonMemoryShareWarningRatio {
+            return .warning
+        }
+        return nil
+    }
+
+    private func swapMessage(for system: LocalSystemStatus, severity: Severity) -> String {
+        let used = system.swapUsedMB ?? 0
+        let total = system.swapTotalMB ?? 0
+        let ratio = system.swapUsedRatio.map { " (\(Int(($0 * 100).rounded()))%)" } ?? ""
+        if severity == .critical {
+            return "macOS is using \(Int(used.rounded())) MB of \(Int(total.rounded())) MB swap\(ratio)."
+        }
+        return "macOS is using significant swap: \(Int(used.rounded())) MB of \(Int(total.rounded())) MB\(ratio)."
+    }
+
+    private func processMemoryMessage(for system: LocalSystemStatus, severity: Severity) -> String {
+        let share = system.totalPhysicalMemoryMB.flatMap { total -> String? in
+            guard total > 0 else { return nil }
+            return "\(Int(((system.totalMemoryMB / total) * 100).rounded()))% of physical memory"
+        } ?? "an unknown share of physical memory"
+
+        switch severity {
+        case .critical:
+            return "Roon processes use \(share) and memory pressure is critical."
+        case .warning:
+            return "Roon processes use \(share), which is high enough to affect system headroom."
+        case .info:
+            return "Roon processes are above the configured memory threshold, but macOS is not under memory pressure."
         }
     }
 

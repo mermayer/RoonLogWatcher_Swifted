@@ -192,10 +192,53 @@ public struct LocalSystemStatus: Codable {
     public var processes: [RoonProcessStatus]
     public var totalCPUPercent: Double
     public var totalMemoryMB: Double
+    public var totalPhysicalMemoryMB: Double?
     public var openFileCount: Int?
+    public var totalDiskReadRateMBps: Double?
+    public var totalDiskWriteRateMBps: Double?
+    public var swapTotalMB: Double?
+    public var swapUsedMB: Double?
+    public var swapFreeMB: Double?
+    public var swapUsedRatio: Double?
     public var logVolumePath: String?
     public var logVolumeFreeMB: Double?
     public var logVolumeFreeRatio: Double?
+
+    public init(
+        sampledAt: Date,
+        host: RoonHostStatus,
+        processes: [RoonProcessStatus],
+        totalCPUPercent: Double,
+        totalMemoryMB: Double,
+        totalPhysicalMemoryMB: Double? = nil,
+        openFileCount: Int?,
+        totalDiskReadRateMBps: Double? = nil,
+        totalDiskWriteRateMBps: Double? = nil,
+        swapTotalMB: Double? = nil,
+        swapUsedMB: Double? = nil,
+        swapFreeMB: Double? = nil,
+        swapUsedRatio: Double? = nil,
+        logVolumePath: String?,
+        logVolumeFreeMB: Double?,
+        logVolumeFreeRatio: Double?
+    ) {
+        self.sampledAt = sampledAt
+        self.host = host
+        self.processes = processes
+        self.totalCPUPercent = totalCPUPercent
+        self.totalMemoryMB = totalMemoryMB
+        self.totalPhysicalMemoryMB = totalPhysicalMemoryMB
+        self.openFileCount = openFileCount
+        self.totalDiskReadRateMBps = totalDiskReadRateMBps
+        self.totalDiskWriteRateMBps = totalDiskWriteRateMBps
+        self.swapTotalMB = swapTotalMB
+        self.swapUsedMB = swapUsedMB
+        self.swapFreeMB = swapFreeMB
+        self.swapUsedRatio = swapUsedRatio
+        self.logVolumePath = logVolumePath
+        self.logVolumeFreeMB = logVolumeFreeMB
+        self.logVolumeFreeRatio = logVolumeFreeRatio
+    }
 }
 
 public struct RoonHostStatus: Codable {
@@ -214,4 +257,32 @@ public struct RoonProcessStatus: Codable, Identifiable {
     public var cpuPercent: Double
     public var memoryMB: Double
     public var openFiles: Int?
+    public var diskReadBytes: UInt64?
+    public var diskWriteBytes: UInt64?
+    public var diskReadRateMBps: Double?
+    public var diskWriteRateMBps: Double?
+
+    public init(
+        pid: Int,
+        name: String,
+        path: String,
+        cpuPercent: Double,
+        memoryMB: Double,
+        openFiles: Int?,
+        diskReadBytes: UInt64? = nil,
+        diskWriteBytes: UInt64? = nil,
+        diskReadRateMBps: Double? = nil,
+        diskWriteRateMBps: Double? = nil
+    ) {
+        self.pid = pid
+        self.name = name
+        self.path = path
+        self.cpuPercent = cpuPercent
+        self.memoryMB = memoryMB
+        self.openFiles = openFiles
+        self.diskReadBytes = diskReadBytes
+        self.diskWriteBytes = diskWriteBytes
+        self.diskReadRateMBps = diskReadRateMBps
+        self.diskWriteRateMBps = diskWriteRateMBps
+    }
 }

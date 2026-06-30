@@ -179,6 +179,8 @@ public struct LogParser {
 
     private func parseServer(line: String, lower: String, source: String, time: Date) -> [RuntimeEvent] {
         var events: [RuntimeEvent] = []
+        guard !isPlaybackStatusLine(lower) else { return events }
+
         if lower.contains("starting roon") || lower.contains("roonserver start") || lower.contains("server startup") {
             events.append(event(domain: "server", type: "server.started", severity: .info, title: "Server startup", message: trimmed(line), source: source, time: time))
         }
@@ -379,6 +381,14 @@ public struct LogParser {
 
     private func isInteresting(line lower: String) -> Bool {
         ["error", "warning", "failed", "timeout", "disconnect", "database", "exception"].contains { lower.contains($0) }
+    }
+
+    private func isPlaybackStatusLine(_ lower: String) -> Bool {
+        lower.contains("[playing @")
+            || lower.contains("[loading @")
+            || lower.contains("[stopped @")
+            || lower.contains("onplayfeedback playing")
+            || lower.contains("onplayfeedback stopped")
     }
 
     private func trimmed(_ value: String) -> String {

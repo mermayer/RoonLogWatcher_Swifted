@@ -659,13 +659,38 @@ enum DashboardAssets {
       border-left: 1px solid var(--line);
     }
 
+    .right-rail:has(.alert-detail:not([hidden])) {
+      grid-template-rows: minmax(400px, 1.55fr) minmax(0, 0.75fr) minmax(0, 0.52fr);
+    }
+
     .right-rail .section {
       min-height: 0;
       display: grid;
     }
 
     .alerts-section {
-      grid-template-rows: 48px auto minmax(0, 1fr) auto;
+      grid-template-rows: 48px auto minmax(0, auto) minmax(0, 1fr) auto;
+    }
+
+    .alerts-section .section-title {
+      grid-row: 1;
+    }
+
+    .alerts-section .tabs {
+      grid-row: 2;
+    }
+
+    .alerts-section .alert-detail {
+      grid-row: 3;
+    }
+
+    .alerts-section .alert-list {
+      grid-row: 4;
+    }
+
+    .alerts-section > .text-link {
+      grid-row: 5;
+      align-self: stretch;
     }
 
     .playback-section {
@@ -1422,13 +1447,23 @@ enum DashboardAssets {
     }
 
     .alert-detail {
+      grid-template-rows: auto auto minmax(44px, 1fr) auto;
+      min-width: 0;
+      min-height: 0;
+      max-height: min(170px, 30vh);
+      overflow: auto;
+      gap: 8px;
+      padding: 10px 18px;
       border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: rgba(13, 18, 24, 0.96);
     }
 
     .alert-detail strong {
       color: #e7edf4;
       font-size: 13px;
       line-height: 1.35;
+      overflow-wrap: anywhere;
     }
 
     .log-detail[hidden],
@@ -1446,6 +1481,19 @@ enum DashboardAssets {
       min-width: 0;
     }
 
+    .alert-detail-meta,
+    .alert-detail-actions {
+      flex-wrap: wrap;
+    }
+
+    .alert-detail-actions {
+      justify-content: flex-end;
+    }
+
+    .alert-detail-actions .small-button {
+      flex: 0 0 auto;
+    }
+
     .log-detail-meta span:not(.level-badge),
     .alert-detail-meta span:not(.level-badge) {
       color: var(--muted);
@@ -1453,8 +1501,16 @@ enum DashboardAssets {
       white-space: nowrap;
     }
 
+    #alertDetailSource {
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .log-detail pre,
     .alert-detail pre {
+      min-height: 0;
       margin: 0;
       max-height: 82px;
       overflow: auto;
@@ -1465,14 +1521,18 @@ enum DashboardAssets {
     }
 
     .alert-detail pre {
-      max-height: 160px;
+      max-height: 72px;
     }
 
     #detailStatus,
     #alertDetailStatus {
+      min-width: 0;
       margin-right: auto;
       color: var(--muted);
       font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .chart-panel {
@@ -2938,6 +2998,10 @@ enum DashboardAssets {
         "health.system.host.detected": "Local Roon Server detected",
         "health.system.cpu.high": "High Roon process CPU",
         "health.system.memory.high": "High Roon process memory",
+        "health.system.memory.observed": "Roon process memory observed",
+        "health.system.swap.ok": "System swap low",
+        "health.system.swap.used": "System swap in use",
+        "health.system.swap.critical": "System swap critical",
         "health.runtime.core": "Roon Core",
         "health.runtime.raat": "RAAT Server",
         "health.runtime.database": "Database",
@@ -2957,6 +3021,10 @@ enum DashboardAssets {
         "health.processes": "Processes",
         "health.cpu": "CPU",
         "health.memory": "Memory",
+        "health.swap": "Swap",
+        "health.diskIO": "Disk I/O",
+        "health.diskRead": "read",
+        "health.diskWrite": "write",
         "health.openFiles": "Open files",
         "health.diskFree": "Disk free",
         "health.lastModified": "Modified",
@@ -2998,8 +3066,9 @@ enum DashboardAssets {
         virtualMemory: "Virtual Memory",
         managedMemory: "Managed Memory",
         unmanaged: "Unmanaged",
+        systemSwap: "System Swap",
         cpuUsage: "CPU Usage",
-        ioWait: "I/O Wait",
+        diskIO: "Roon Disk I/O",
         openFiles: "Open Files",
         savedMessage: "Saved. Use Reload Config in the menu or restart for port changes.",
         reloadedMessage: "Reloaded from disk.",
@@ -3181,6 +3250,10 @@ enum DashboardAssets {
         "health.system.host.detected": "Lokaler Roon Server erkannt",
         "health.system.cpu.high": "Hohe Roon-Prozess-CPU",
         "health.system.memory.high": "Hoher Roon-Prozessspeicher",
+        "health.system.memory.observed": "Roon-Prozessspeicher beobachtet",
+        "health.system.swap.ok": "System-Swap niedrig",
+        "health.system.swap.used": "System nutzt Swap",
+        "health.system.swap.critical": "System-Swap kritisch",
         "health.runtime.core": "Roon Core",
         "health.runtime.raat": "RAAT Server",
         "health.runtime.database": "Datenbank",
@@ -3200,6 +3273,10 @@ enum DashboardAssets {
         "health.processes": "Prozesse",
         "health.cpu": "CPU",
         "health.memory": "Speicher",
+        "health.swap": "Swap",
+        "health.diskIO": "Disk-I/O",
+        "health.diskRead": "Lesen",
+        "health.diskWrite": "Schreiben",
         "health.openFiles": "Offene Dateien",
         "health.diskFree": "Speicher frei",
         "health.lastModified": "Geändert",
@@ -3241,8 +3318,9 @@ enum DashboardAssets {
         virtualMemory: "Virtueller Speicher",
         managedMemory: "Managed Speicher",
         unmanaged: "Unmanaged",
+        systemSwap: "System-Swap",
         cpuUsage: "CPU-Auslastung",
-        ioWait: "I/O-Wartezeit",
+        diskIO: "Roon Disk-I/O",
         openFiles: "Offene Dateien",
         savedMessage: "Gespeichert. Nutze Config neu laden im Menü oder starte für Portänderungen neu.",
         reloadedMessage: "Von Datei neu geladen.",
@@ -3285,8 +3363,9 @@ enum DashboardAssets {
         "resource.virtual": "Virtual memory reported by Roon metrics. This can be much larger than physical memory and is mainly useful for trend changes.",
         "resource.managed": "Managed runtime memory reported by Roon logs, usually related to .NET/Mono managed allocations.",
         "resource.unmanaged": "Native or unmanaged memory reported by Roon logs. Growth here can indicate native buffers or cache pressure.",
+        "resource.swap": "macOS swap currently in use. This is the strongest memory-pressure signal in the health score.",
         "resource.cpu": "Current Roon-related process CPU percentage from macOS sampling. It is intentionally sampled slowly to reduce background overhead.",
-        "resource.ioWait": "Per-process I/O wait is not sampled yet. The dashboard shows -- instead of a synthetic value.",
+        "resource.diskIO": "Read plus write throughput for detected Roon processes, sampled from macOS process resource counters. The first sample may show -- until a rate can be calculated.",
         "resource.openFiles": "Open file descriptors for detected Roon processes. macOS may hide this value for other apps; unavailable samples are shown as --.",
         "resource.percent": "Relative bar value for quick scanning. Thresholds are conservative visual guides, not hard Roon limits.",
         "logs.autoScroll": "When enabled, the stream stays pinned to the newest log line. Turn it off to inspect older rows without the view jumping.",
@@ -3373,8 +3452,9 @@ enum DashboardAssets {
         "resource.virtual": "Virtueller Speicher aus Roon-Metriken. Kann deutlich größer sein als physischer Speicher und ist vor allem für Trends hilfreich.",
         "resource.managed": "Managed Runtime Memory aus Roon-Logs, typischerweise .NET/Mono-verwaltete Allokationen.",
         "resource.unmanaged": "Nativer oder unmanaged Speicher aus Roon-Logs. Wachstum kann auf native Puffer oder Cache-Druck hinweisen.",
+        "resource.swap": "Aktuell von macOS genutzter Swap. Das ist das stärkste Speicherdruck-Signal für den Health-Score.",
         "resource.cpu": "Aktuelle CPU-Prozentwerte erkannter Roon-Prozesse aus macOS-Proben. Wird bewusst langsam abgefragt, um Ressourcen zu sparen.",
-        "resource.ioWait": "Prozessbezogene I/O-Wartezeit wird noch nicht gemessen. Das Dashboard zeigt -- statt eines künstlichen Werts.",
+        "resource.diskIO": "Gelesener plus geschriebener Durchsatz erkannter Roon-Prozesse aus macOS-Prozesszählern. Die erste Probe kann -- zeigen, bis eine Rate berechnet werden kann.",
         "resource.openFiles": "Offene Dateideskriptoren erkannter Roon-Prozesse. macOS kann diesen Wert für andere Apps verbergen; nicht verfügbare Proben erscheinen als --.",
         "resource.percent": "Relative Balkenanzeige zum schnellen Scannen. Die Schwellen sind visuelle Orientierung, keine harten Roon-Grenzen.",
         "logs.autoScroll": "Wenn aktiv, bleibt der Stream bei der neuesten Logzeile. Ausschalten, um ältere Zeilen zu prüfen, ohne dass die Ansicht springt.",
@@ -4247,18 +4327,36 @@ enum DashboardAssets {
         renderList("healthSystemList", [], () => "", t("health.noSystem"));
         return;
       }
+      const diskReadRate = Number(system.totalDiskReadRateMBps);
+      const diskWriteRate = Number(system.totalDiskWriteRateMBps);
+      const hasDiskIO = Number.isFinite(diskReadRate) || Number.isFinite(diskWriteRate);
+      const diskRead = Number.isFinite(diskReadRate) ? diskReadRate : 0;
+      const diskWrite = Number.isFinite(diskWriteRate) ? diskWriteRate : 0;
+      const diskIOLabel = hasDiskIO
+        ? `${formatResource(diskRead + diskWrite, "MB/s")} (${t("health.diskRead")} ${formatResource(diskRead, "MB/s")} · ${t("health.diskWrite")} ${formatResource(diskWrite, "MB/s")})`
+        : "--";
       const rows = [
         [system.host?.isRoonServerLikely ? t("health.hostDetected") : t("health.hostNotDetected"), system.host?.reason || ""],
         [t("health.processes"), `${system.processes?.length || 0}`],
         [t("health.cpu"), `${Number(system.totalCPUPercent || 0).toFixed(1)}%`],
         [t("health.memory"), formatResource(system.totalMemoryMB || 0, "MB")],
+        [t("health.swap"), Number.isFinite(Number(system.swapUsedMB)) ? `${formatResource(system.swapUsedMB, "MB")} / ${formatResource(system.swapTotalMB || 0, "MB")}` : "--"],
+        [t("health.diskIO"), diskIOLabel],
         [t("health.openFiles"), system.openFileCount ?? "--"],
         [t("health.diskFree"), system.logVolumeFreeMB ? `${formatResource(system.logVolumeFreeMB, "MB")} · ${system.logVolumePath || ""}` : "--"]
       ];
-      const processRows = (system.processes || []).map(process => [
-        process.name,
-        `pid ${process.pid} · ${Number(process.cpuPercent || 0).toFixed(1)}% CPU · ${formatResource(process.memoryMB || 0, "MB")}${process.openFiles ? ` · ${process.openFiles} ${t("health.openFiles")}` : ""}`
-      ]);
+      const processRows = (system.processes || []).map(process => {
+        const processReadRate = Number(process.diskReadRateMBps);
+        const processWriteRate = Number(process.diskWriteRateMBps);
+        const hasProcessDiskIO = Number.isFinite(processReadRate) || Number.isFinite(processWriteRate);
+        const processDiskIO = hasProcessDiskIO
+          ? ` · ${formatResource((Number.isFinite(processReadRate) ? processReadRate : 0) + (Number.isFinite(processWriteRate) ? processWriteRate : 0), "MB/s")} ${t("health.diskIO")}`
+          : "";
+        return [
+          process.name,
+          `pid ${process.pid} · ${Number(process.cpuPercent || 0).toFixed(1)}% CPU · ${formatResource(process.memoryMB || 0, "MB")}${processDiskIO}${process.openFiles ? ` · ${process.openFiles} ${t("health.openFiles")}` : ""}`
+        ];
+      });
       renderList("healthSystemList", rows.concat(processRows), row => `
         <div class="health-detail-row">
           <strong class="label-with-help">${escapeHTML(row[0])}${help("health.detail.systemRow")}</strong>
@@ -4420,15 +4518,23 @@ enum DashboardAssets {
       const system = snapshot.system || {};
       const cpu = Number(system.totalCPUPercent);
       const openFiles = Number(system.openFileCount);
+      const swapUsed = Number(system.swapUsedMB);
+      const swapRatio = Number(system.swapUsedRatio);
+      const diskReadRate = Number(system.totalDiskReadRateMBps);
+      const diskWriteRate = Number(system.totalDiskWriteRateMBps);
       const hasCPU = Number.isFinite(cpu) && (system.sampledAt || (system.processes || []).length);
       const hasOpenFiles = Number.isFinite(openFiles);
+      const hasSwap = Number.isFinite(swapUsed);
+      const hasDiskIO = Number.isFinite(diskReadRate) || Number.isFinite(diskWriteRate);
+      const diskIORate = (Number.isFinite(diskReadRate) ? diskReadRate : 0) + (Number.isFinite(diskWriteRate) ? diskWriteRate : 0);
       const rows = [
         { label: t("rssMemory"), value: physical, unit: "MB", percent: Math.min(92, physical / 16), helpKey: "resource.rss" },
         { label: t("virtualMemory"), value: virtual, unit: "MB", percent: Math.min(92, virtual / 24), helpKey: "resource.virtual" },
         { label: t("managedMemory"), value: managed, unit: "MB", percent: Math.min(92, managed / 12), helpKey: "resource.managed" },
         { label: t("unmanaged"), value: unmanaged, unit: "MB", percent: Math.min(92, unmanaged / 14), helpKey: "resource.unmanaged" },
+        { label: t("systemSwap"), value: hasSwap ? swapUsed : null, unit: "MB", percent: hasSwap ? Math.min(100, (Number.isFinite(swapRatio) ? swapRatio * 100 : swapUsed / 10.24)) : null, helpKey: "resource.swap" },
         { label: t("cpuUsage"), value: hasCPU ? cpu : null, unit: "%", percent: hasCPU ? Math.min(100, cpu) : null, helpKey: "resource.cpu" },
-        { label: t("ioWait"), value: null, unit: "%", percent: null, helpKey: "resource.ioWait" },
+        { label: t("diskIO"), value: hasDiskIO ? diskIORate : null, unit: "MB/s", percent: hasDiskIO ? Math.min(100, diskIORate * 10) : null, helpKey: "resource.diskIO" },
         { label: t("openFiles"), value: hasOpenFiles ? openFiles : null, unit: "", percent: hasOpenFiles ? Math.min(100, openFiles / 25) : null, helpKey: "resource.openFiles" }
       ];
       renderList("resourceList", rows, row => `
@@ -4493,6 +4599,11 @@ enum DashboardAssets {
     function formatResource(value, unit) {
       if (!unit) return new Intl.NumberFormat().format(value);
       if (unit === "%") return `${Number(value).toFixed(1)}%`;
+      if (unit === "MB/s") {
+        if (value >= 1024) return `${(value / 1024).toFixed(2)} GB/s`;
+        if (value >= 10) return `${value.toFixed(1)} MB/s`;
+        return `${value.toFixed(2)} MB/s`;
+      }
       if (value >= 1024) return `${(value / 1024).toFixed(2)} GB`;
       return `${Math.round(value)} ${unit}`;
     }
