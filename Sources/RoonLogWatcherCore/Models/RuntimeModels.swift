@@ -1,6 +1,6 @@
 import Foundation
 
-public enum Severity: String, Codable, CaseIterable {
+public enum Severity: String, Codable, CaseIterable, Sendable {
     case info
     case warning
     case critical
@@ -68,6 +68,7 @@ public struct RuntimeSnapshot: Codable {
     public var healthTrend: [RoonHealthTrendPoint]
     public var memoryTrend24h: [MemoryTrendPoint]
     public var memoryInsights: [MemoryInsight]
+    public var memoryInsightTotalCount: Int
     public var system: LocalSystemStatus?
     public var watchedSources: [WatchedSource]
     public var memory: [MemoryMetric]
@@ -75,7 +76,12 @@ public struct RuntimeSnapshot: Codable {
     public var volumeBuckets: [LogVolumeBucket]
     public var timeline: [RuntimeEvent]
     public var alerts: [RuntimeEvent]
+    public var alertTotalCount: Int
+    public var warningAlertTotalCount: Int
+    public var criticalAlertTotalCount: Int
     public var playback: [RuntimeEvent]
+    public var playbackTotalCount: Int
+    public var diagnostics: DiagnosticAnalysisSnapshot
     public var counters: RuntimeCounters
 }
 
@@ -134,6 +140,8 @@ public struct RuntimeEvent: Codable, Identifiable {
     public var source: String
     public var valueMB: Double?
     public var zone: String?
+    public var numericValue: Double? = nil
+    public var unit: String? = nil
 }
 
 public struct MemoryMetric: Codable, Identifiable {
@@ -159,7 +167,7 @@ public struct MemoryTrendPoint: Codable, Identifiable {
     public var source: String
 }
 
-public struct MemoryInsight: Codable, Identifiable {
+public struct MemoryInsight: Codable, Identifiable, Sendable {
     public var id: String
     public var observedAt: Date
     public var source: String
@@ -175,15 +183,20 @@ public struct MemoryInsight: Codable, Identifiable {
     public var deltaUnmanagedMB: Double?
     public var deltaVirtualMB: Double?
     public var relatedEvents: [MemoryInsightEvidence]
+    public var deltaGCCommittedMB: Double? = nil
+    public var deltaGCPauseWindowPercent: Double? = nil
 }
 
-public struct MemoryInsightEvidence: Codable, Identifiable {
+public struct MemoryInsightEvidence: Codable, Identifiable, Sendable {
     public var id: String
     public var time: Date
     public var category: String
     public var title: String
     public var message: String
     public var source: String
+    public var byteCount: Int? = nil
+    public var relativeSeconds: Double? = nil
+    public var relation: String? = nil
 }
 
 public struct LocalSystemStatus: Codable {
@@ -200,6 +213,8 @@ public struct LocalSystemStatus: Codable {
     public var swapUsedMB: Double?
     public var swapFreeMB: Double?
     public var swapUsedRatio: Double?
+    public var swapInRateMBps: Double?
+    public var swapOutRateMBps: Double?
     public var logVolumePath: String?
     public var logVolumeFreeMB: Double?
     public var logVolumeFreeRatio: Double?
@@ -218,6 +233,8 @@ public struct LocalSystemStatus: Codable {
         swapUsedMB: Double? = nil,
         swapFreeMB: Double? = nil,
         swapUsedRatio: Double? = nil,
+        swapInRateMBps: Double? = nil,
+        swapOutRateMBps: Double? = nil,
         logVolumePath: String?,
         logVolumeFreeMB: Double?,
         logVolumeFreeRatio: Double?
@@ -235,6 +252,8 @@ public struct LocalSystemStatus: Codable {
         self.swapUsedMB = swapUsedMB
         self.swapFreeMB = swapFreeMB
         self.swapUsedRatio = swapUsedRatio
+        self.swapInRateMBps = swapInRateMBps
+        self.swapOutRateMBps = swapOutRateMBps
         self.logVolumePath = logVolumePath
         self.logVolumeFreeMB = logVolumeFreeMB
         self.logVolumeFreeRatio = logVolumeFreeRatio

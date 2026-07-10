@@ -4,9 +4,8 @@ struct RoonHealthEvaluator {
     var configuration: AppConfiguration
     private let memoryNearThresholdRatio = 0.92
     private let swapWarningMB = 256.0
-    private let swapCriticalMB = 1_024.0
-    private let swapWarningRatio = 0.10
-    private let swapCriticalRatio = 0.50
+    private let swapOutWarningRateMBps = 0.05
+    private let swapOutCriticalRateMBps = 5.0
     private let roonMemoryShareWarningRatio = 0.35
     private let roonMemoryShareCriticalRatio = 0.55
 
@@ -14,16 +13,16 @@ struct RoonHealthEvaluator {
         now: Date,
         mode: RuntimeMode,
         sources: [WatchedSource],
-        logs: [LogLine],
+        latestLog: LogLine?,
         events: [RuntimeEvent],
         memory: [MemoryMetric],
         memoryHistory: [MemoryMetric],
         system: LocalSystemStatus?,
-        processedLines: Int
+        processedLines: Int,
+        diagnostics: DiagnosticAnalysisSnapshot? = nil
     ) -> RoonHealth {
         var signals: [RoonHealthSignal] = []
         let rules = configuration.healthRules
-        let latestLog = logs.last
         let lastLogAge = latestLog.map { max(0, now.timeIntervalSince($0.receivedAt)) }
 
         evaluateSources(mode: mode, sources: sources, into: &signals)
@@ -36,8 +35,11 @@ struct RoonHealthEvaluator {
         evaluateMemory(now: now, memory: memory, memoryHistory: memoryHistory, system: system, into: &signals)
         evaluateSystem(system, rules: rules, into: &signals)
         evaluateDisk(now: now, sources: sources, system: system, rules: rules, into: &signals)
+        applyDiagnosticContext(diagnostics, to: &signals)
+        evaluateDiagnosticIncidents(diagnostics, into: &signals)
+        evaluatePredictions(diagnostics, into: &signals)
 
-        let impact = min(100, signals.reduce(0) { $0 + max(0, $1.impact) })
+        let impact = effectiveImpact(signals: signals, diagnostics: diagnostics)
         let score = max(0, 100 - impact)
         let state: RoonHealthState
         if signals.contains(where: { $0.severity == .critical }) || score < 55 {
@@ -64,8 +66,135 @@ struct RoonHealthEvaluator {
             evaluatedAt: now,
             lastLogAt: latestLog?.receivedAt,
             lastLogAgeSeconds: lastLogAge,
-            signals: Array(sortedSignals.prefix(10))
+            signals: sortedSignals
         )
+    }
+
+    private func applyDiagnosticContext(_ diagnostics: DiagnosticAnalysisSnapshot?, to signals: inout [RoonHealthSignal]) {
+        guard let diagnostics else { return }
+        let contextualDomains: Set<String> = ["server", "database", "raat", "playback"]
+        for index in signals.indices where signals[index].impact > 0 {
+            guard contextualDomains.contains(signals[index].domain),
+                  let observedAt = signals[index].observedAt
+            else { continue }
+
+            let matching = diagnostics.incidents.first { incident in
+                incident.healthImpact == 0
+                    && incident.affectedDomains.contains(signals[index].domain)
+                    && observedAt >= incident.startedAt.addingTimeInterval(-30)
+                    && observedAt <= (incident.resolvedAt ?? incident.updatedAt.addingTimeInterval(2 * 60))
+            }
+            if let matching {
+                signals[index].severity = .info
+                signals[index].impact = 0
+                signals[index].message = "Correlated with \(matching.title.lowercased()); not counted as a separate failure."
+                continue
+            }
+
+            let recovered = diagnostics.incidents.first { incident in
+                incident.state == .resolved
+                    && incident.affectedDomains.contains(signals[index].domain)
+                    && incident.resolvedAt.map { $0 >= observedAt } == true
+            }
+            if let recovered {
+                signals[index].severity = .info
+                signals[index].impact = 0
+                signals[index].message = recovered.recoveryMessage ?? "A later recovery event resolved this condition."
+            }
+        }
+    }
+
+    private func evaluateDiagnosticIncidents(_ diagnostics: DiagnosticAnalysisSnapshot?, into signals: inout [RoonHealthSignal]) {
+        guard let diagnostics else { return }
+        for incident in diagnostics.incidents.prefix(12) where incident.state != .resolved && incident.healthImpact > 0 {
+            signals.append(signal(
+                id: "incident.\(incident.id)",
+                domain: incident.affectedDomains.first ?? "incident",
+                severity: incident.severity,
+                title: incident.title,
+                message: incident.summary,
+                impact: incident.healthImpact,
+                observedAt: incident.updatedAt,
+                count: incident.eventCount,
+                source: incident.source,
+                zone: incident.zone
+            ))
+        }
+
+        for incident in diagnostics.incidents.prefix(6) where incident.state == .resolved {
+            signals.append(signal(
+                id: "incident.recovered.\(incident.id)",
+                domain: "recovery",
+                severity: .info,
+                title: "Recovered: \(incident.title)",
+                message: incident.recoveryMessage ?? "The incident has recovered.",
+                impact: 0,
+                observedAt: incident.resolvedAt,
+                count: incident.eventCount,
+                source: incident.source,
+                zone: incident.zone
+            ))
+        }
+    }
+
+    private func evaluatePredictions(_ diagnostics: DiagnosticAnalysisSnapshot?, into signals: inout [RoonHealthSignal]) {
+        guard let diagnostics else { return }
+        for prediction in diagnostics.predictions where prediction.severity != .info {
+            let impact: Int
+            switch prediction.kind {
+            case "memory.growth", "files.growth": impact = 8
+            case "gc.pressure", "cpu.sustained", "disk.sustained": impact = 6
+            default: impact = 5
+            }
+            signals.append(signal(
+                id: "prediction.\(prediction.kind)",
+                domain: "prediction",
+                severity: prediction.severity,
+                title: prediction.title,
+                message: prediction.message,
+                impact: impact,
+                observedAt: prediction.observedAt,
+                count: prediction.currentValue.map { Int($0.rounded()) }
+            ))
+        }
+    }
+
+    private func effectiveImpact(signals: [RoonHealthSignal], diagnostics: DiagnosticAnalysisSnapshot?) -> Int {
+        let activeIncidents = diagnostics?.incidents.filter { $0.state != .resolved && $0.healthImpact > 0 } ?? []
+        var grouped: [String: Int] = [:]
+        for signal in signals where signal.impact > 0 {
+            let group: String
+            if signal.id.hasPrefix("memory.")
+                || signal.id.hasPrefix("system.swap")
+                || signal.id == "system.memory.high"
+                || signal.id == "prediction.memory.growth"
+                || signal.id == "prediction.gc.pressure" {
+                group = "memory-pressure"
+            } else if signal.id == "system.cpu.high" || signal.id == "prediction.cpu.sustained" {
+                group = "cpu"
+            } else if let incident = activeIncidents.first(where: { "incident.\($0.id)" == signal.id }) {
+                group = "incident:\(incident.id)"
+            } else if signal.domain == "prediction" {
+                group = signal.id
+            } else if let incident = activeIncidents
+                .filter({ incident in
+                    guard incident.affectedDomains.contains(signal.domain) else { return false }
+                    if let signalZone = signal.zone, let incidentZone = incident.zone,
+                       signalZone != incidentZone {
+                        return false
+                    }
+                    guard let observedAt = signal.observedAt else { return true }
+                    return observedAt >= incident.startedAt.addingTimeInterval(-30)
+                        && observedAt <= incident.updatedAt.addingTimeInterval(30)
+                })
+                .max(by: { $0.healthImpact < $1.healthImpact }) {
+                group = "incident:\(incident.id)"
+            } else {
+                group = "domain:\(signal.domain)"
+            }
+            grouped[group] = max(grouped[group, default: 0], signal.impact)
+        }
+        return min(100, grouped.values.reduce(0, +))
     }
 
     private func evaluateSources(mode: RuntimeMode, sources: [WatchedSource], into signals: inout [RoonHealthSignal]) {
@@ -242,7 +371,8 @@ struct RoonHealthEvaluator {
     }
 
     private func evaluateServerState(now: Date, events: [RuntimeEvent], rules: HealthRuleConfiguration, into signals: inout [RoonHealthSignal]) {
-        if let exception = events.last(where: { $0.type == "server.exception" }) {
+        let recentServerEvents = recentEvents(now: now, events: events, minutes: rules.eventWindowMinutes)
+        if let exception = recentServerEvents.last(where: { $0.type == "server.exception" }) {
             signals.append(signal(
                 id: "server.exception",
                 domain: "server",
@@ -269,8 +399,7 @@ struct RoonHealthEvaluator {
             ))
         }
 
-        let recentExceptionWarnings = recentEvents(now: now, events: events, minutes: rules.eventWindowMinutes)
-            .filter { $0.type == "server.exception.warning" }
+        let recentExceptionWarnings = recentServerEvents.filter { $0.type == "server.exception.warning" }
         if !recentExceptionWarnings.isEmpty {
             signals.append(signal(
                 id: "server.exception.warning",
@@ -385,7 +514,8 @@ struct RoonHealthEvaluator {
         let thresholds: [String: Double] = [
             "Physical Memory": configuration.memoryAlerts.physicalMemoryMB,
             "Managed Memory": configuration.memoryAlerts.managedMemoryMB,
-            "Unmanaged Memory": configuration.memoryAlerts.unmanagedMemoryMB
+            "Unmanaged Memory": configuration.memoryAlerts.unmanagedMemoryMB,
+            "Native Memory": configuration.memoryAlerts.unmanagedMemoryMB
         ]
         let swapSeverity = swapPressureSeverity(system)
         let processShareSeverity = roonMemoryShareSeverity(system)
@@ -461,7 +591,7 @@ struct RoonHealthEvaluator {
             return ("memory.physical_high", "memory.physical_near_threshold")
         case "Managed Memory":
             return ("memory.managed_high", "memory.managed_near_threshold")
-        case "Unmanaged Memory":
+        case "Unmanaged Memory", "Native Memory":
             return ("memory.unmanaged_high", "memory.unmanaged_near_threshold")
         default:
             return ("memory.high", "memory.near_threshold")
@@ -566,12 +696,15 @@ struct RoonHealthEvaluator {
         let severity = swapPressureSeverity(system)
 
         guard let severity else {
+            let hasAllocatedSwap = swapUsedMB >= swapWarningMB
             signals.append(signal(
-                id: "system.swap.ok",
+                id: hasAllocatedSwap ? "system.swap.inactive" : "system.swap.ok",
                 domain: "system",
                 severity: .info,
-                title: "System swap low",
-                message: "macOS swap usage is currently low.",
+                title: hasAllocatedSwap ? "System swap inactive" : "System swap low",
+                message: hasAllocatedSwap
+                    ? "macOS has allocated swap, but no active swap-out pressure is visible."
+                    : "macOS swap usage is currently low.",
                 impact: 0,
                 observedAt: system.sampledAt,
                 valueMB: swapUsedMB,
@@ -589,17 +722,16 @@ struct RoonHealthEvaluator {
             impact: severity == .critical ? 42 : 24,
             observedAt: system.sampledAt,
             valueMB: swapUsedMB,
-            thresholdMB: severity == .critical ? swapCriticalMB : swapWarningMB
+            thresholdMB: nil
         ))
     }
 
     private func swapPressureSeverity(_ system: LocalSystemStatus?) -> Severity? {
-        guard let system, let usedMB = system.swapUsedMB else { return nil }
-        let ratio = system.swapUsedRatio ?? 0
-        if usedMB >= swapCriticalMB || ratio >= swapCriticalRatio {
+        guard let outRate = system?.swapOutRateMBps else { return nil }
+        if outRate >= swapOutCriticalRateMBps {
             return .critical
         }
-        if usedMB >= swapWarningMB || ratio >= swapWarningRatio {
+        if outRate >= swapOutWarningRateMBps {
             return .warning
         }
         return nil
@@ -624,10 +756,11 @@ struct RoonHealthEvaluator {
         let used = system.swapUsedMB ?? 0
         let total = system.swapTotalMB ?? 0
         let ratio = system.swapUsedRatio.map { " (\(Int(($0 * 100).rounded()))%)" } ?? ""
+        let outRate = system.swapOutRateMBps ?? 0
         if severity == .critical {
-            return "macOS is using \(Int(used.rounded())) MB of \(Int(total.rounded())) MB swap\(ratio)."
+            return "macOS is actively swapping out at \(String(format: "%.2f", outRate)) MB/s; \(Int(used.rounded())) MB of \(Int(total.rounded())) MB is allocated\(ratio)."
         }
-        return "macOS is using significant swap: \(Int(used.rounded())) MB of \(Int(total.rounded())) MB\(ratio)."
+        return "macOS is swapping out at \(String(format: "%.2f", outRate)) MB/s; \(Int(used.rounded())) MB of \(Int(total.rounded())) MB is allocated\(ratio)."
     }
 
     private func processMemoryMessage(for system: LocalSystemStatus, severity: Severity) -> String {

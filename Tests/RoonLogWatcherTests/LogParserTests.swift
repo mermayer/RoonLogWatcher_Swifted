@@ -158,6 +158,7 @@ final class LogParserTests: XCTestCase {
         let store = RuntimeStore(memoryInsightStoreURL: storeURL)
         store.ingest(file: source, line: firstStats, events: parser.parse(file: source, line: firstStats), mode: .live)
         store.ingest(file: source, line: secondStats, events: parser.parse(file: source, line: secondStats), mode: .live)
+        store.flushPersistence()
 
         let restored = RuntimeStore(memoryInsightStoreURL: storeURL)
 
@@ -230,7 +231,7 @@ final class LogParserTests: XCTestCase {
         XCTAssertEqual(snapshot.health.state, .healthy)
     }
 
-    func testSystemSwapUsageCreatesMemoryWarning() {
+    func testAllocatedSwapWithoutActivityDoesNotLowerHealth() {
         let store = RuntimeStore()
         store.updateSystemStatus(localSystemStatus(totalMemoryMB: 2_400, swapUsedMB: 512, swapTotalMB: 2_048))
 
@@ -242,15 +243,20 @@ final class LogParserTests: XCTestCase {
         )
 
         let snapshot = store.snapshot()
-        let signal = snapshot.health.signals.first { $0.id == "system.swap.used" }
-        XCTAssertEqual(signal?.severity, .warning)
+        let signal = snapshot.health.signals.first { $0.id == "system.swap.inactive" }
+        XCTAssertEqual(signal?.severity, .info)
         XCTAssertEqual(signal?.valueMB, 512)
-        XCTAssertEqual(snapshot.health.state, .degraded)
+        XCTAssertEqual(snapshot.health.state, .healthy)
     }
 
-    func testHighSwapRatioCreatesCriticalHealthSignal() {
+    func testActiveSwapOutCreatesCriticalHealthSignal() {
         let store = RuntimeStore()
-        store.updateSystemStatus(localSystemStatus(totalMemoryMB: 2_400, swapUsedMB: 800, swapTotalMB: 1_024))
+        store.updateSystemStatus(localSystemStatus(
+            totalMemoryMB: 2_400,
+            swapUsedMB: 800,
+            swapTotalMB: 1_024,
+            swapOutRateMBps: 6
+        ))
 
         store.ingest(
             file: "/tmp/RoonServer/Logs/RoonServer_log.txt",
@@ -697,6 +703,9 @@ final class LogParserTests: XCTestCase {
                 return (readBytes: readMB * mib, writeBytes: writeMB * mib)
             },
             swapUsageProvider: { (totalMB: 2_048, usedMB: 128, freeMB: 1_920) },
+            swapActivityProvider: {
+                (pageSize: mib, swapIns: 0, swapOuts: UInt64(diskSampleIndex * 30))
+            },
             nowProvider: { baseDate.addingTimeInterval(TimeInterval(diskSampleIndex * 30)) }
         )
 
@@ -715,6 +724,7 @@ final class LogParserTests: XCTestCase {
         XCTAssertEqual(status.processes.first { $0.name == "RoonAppliance" }?.diskReadRateMBps ?? 0, 2.0, accuracy: 0.001)
         XCTAssertEqual(status.swapUsedMB, 128)
         XCTAssertEqual(status.swapUsedRatio ?? 0, 0.0625, accuracy: 0.0001)
+        XCTAssertEqual(status.swapOutRateMBps ?? 0, 1, accuracy: 0.001)
         XCTAssertFalse(status.processes.contains { $0.name == "RoonLogWatcher" || $0.path.contains("processreaper") })
     }
 
@@ -750,7 +760,8 @@ final class LogParserTests: XCTestCase {
         totalMemoryMB: Double,
         totalPhysicalMemoryMB: Double = 16_384,
         swapUsedMB: Double,
-        swapTotalMB: Double
+        swapTotalMB: Double,
+        swapOutRateMBps: Double? = nil
     ) -> LocalSystemStatus {
         LocalSystemStatus(
             sampledAt: Date(),
@@ -779,6 +790,7 @@ final class LogParserTests: XCTestCase {
             swapUsedMB: swapUsedMB,
             swapFreeMB: max(0, swapTotalMB - swapUsedMB),
             swapUsedRatio: swapTotalMB > 0 ? swapUsedMB / swapTotalMB : nil,
+            swapOutRateMBps: swapOutRateMBps,
             logVolumePath: nil,
             logVolumeFreeMB: nil,
             logVolumeFreeRatio: nil

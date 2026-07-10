@@ -2,6 +2,7 @@ import AppKit
 import RoonLogWatcherCore
 
 @main
+@MainActor
 final class MenuBarApp: NSObject, NSApplicationDelegate {
     private var statusController: StatusBarController?
 

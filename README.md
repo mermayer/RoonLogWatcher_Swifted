@@ -5,7 +5,10 @@ This Swift/macOS version is based on the original [`stefanmauron/roon-log-watche
 Roon Log Watcher is a native macOS menu bar app for watching local Roon,
 Roon Server, RAAT Server, Roon Appliance and Roon Bridge log files. It exposes a
 browser-based dashboard at `http://127.0.0.1:17666`, keeps a bounded in-memory log
-history, highlights relevant events and calculates a weighted Roon Health score.
+history, groups related messages into diagnostic incidents, highlights relevant
+events and calculates a weighted Roon Health score. Adaptive baselines and
+explainable predictions help distinguish normal Roon activity from developing
+resource or reliability problems.
 The dashboard can also be opened from another system on the same network by
 using the Roon Mac's hostname or IP address with the configured dashboard port,
 provided macOS firewall and network settings allow the connection.
@@ -38,6 +41,9 @@ operational lists close to the live stream:
   lines do not hide relevant problems.
 - **Memory Insights** lists detected Roon memory jumps from the last seven days
   and keeps related log context available below each insight.
+- **Diagnostics & Predictions** groups related Roon messages into operational
+  incidents, shows active, monitoring and recovered states, and reports trends
+  that differ meaningfully from the learned local baseline.
 - **Playback & RAAT Events** is scoped to playback and RAAT activity only. Its
   full view does not include unrelated system, memory or generic highlighted log
   timeline entries.
@@ -47,11 +53,15 @@ The sidebar footer actions open structured dashboard panels instead of raw JSON:
 | Action | Opens | Useful controls |
 | --- | --- | --- |
 | View all alerts | Full alert list | Search, severity filter, full message text |
+| View all diagnostic incidents | Seven-day incident history | Search, severity filter, state, recovery and correlated evidence |
 | View week of memory insights | Seven-day memory insight list | Search, deltas, confidence, related log lines |
 | View all Playback & RAAT events | Full playback/RAAT event list | Search, severity filter, source/type/zone chips |
 
 Expanded related-log sections stay open while the live dashboard refreshes, so a
 memory insight or warning can be inspected without pausing the live stream first.
+Live refreshes request only log lines newer than the browser's current snapshot.
+The complete alert, diagnostic-incident, memory-insight and playback collections
+are loaded only when their full views or the diagnosis export are opened.
 
 ## What Gets Monitored
 
@@ -64,10 +74,13 @@ The watcher combines log-derived events with local system signals:
 - Current, non-rotated log files matching `fileNameIncludes`, while rotated
   archives and AppleDouble metadata files such as `._Package.swift` are ignored
   by the live tailer.
-- New log lines only; the tailer polls append-only changes instead of re-reading
-  whole files on every refresh.
-- Roon memory lines: physical, managed, unmanaged and virtual memory, plus a
-  compact 24-hour Roon memory trend in the live-log header.
+- New log lines only; the tailer reads append-only changes in bounded chunks,
+  retains incomplete UTF-8 lines until their newline arrives and detects file
+  replacement or truncation without loading an entire backlog at once.
+- Roon runtime statistics: physical and virtual memory, GC-committed and
+  managed-live memory, native memory, managed utilization and GC pause duration
+  and window percentage, plus a compact 24-hour Roon memory trend in the
+  live-log header.
 - Automatic memory-jump analysis: large physical, managed or unmanaged memory
   changes are correlated with nearby Roon log activity and retained for seven
   days.
@@ -79,6 +92,10 @@ The watcher combines log-derived events with local system signals:
   panic, unhandled exception, out-of-memory and segmentation fault.
 - Database signals: corruption, malformed SQLite image, locked database,
   SQLite busy, slow query, timeout, rollback and maintenance completion.
+- Operational episodes: database maintenance, server lifecycle, RAAT transport,
+  playback failure, extension/API connectivity and sync, remote access and cast
+  authentication. Related lines are correlated by time and endpoint instead of
+  being counted as unrelated failures.
 - Local host status: likely Roon host detection, matching Roon processes, CPU,
   resident memory, system swap usage, Roon Disk I/O, optional open-file counts
   and log-volume free space. Values macOS does not expose are shown as `--`;
@@ -98,7 +115,7 @@ crossed:
 | --- | ---: |
 | Physical memory | 150 MB |
 | Managed memory | 250 MB |
-| Unmanaged memory | 250 MB |
+| Native memory (legacy unmanaged metric) | 250 MB |
 
 For each detected jump, the app looks at nearby non-stats Roon log lines in a
 two-minute window before and after the sample. It classifies the surrounding
@@ -114,13 +131,46 @@ metadata work, startup cache loading, streaming sync, playback activity or other
 visible work. Insights are persisted in the app configuration folder as
 `memory-insights.json` and pruned after seven days.
 
+## Diagnostics and Predictions
+
+The diagnostic engine turns bursts of related log lines into a single incident.
+For example, RAAT disconnects caused by a database-maintenance or server-restart
+episode stay attached to that parent incident instead of producing several
+independent Health penalties. Incidents progress through `active`, `monitoring`
+or `resolved` states and retain a compact set of relevant, redacted log evidence
+for seven days.
+
+Explicit success messages such as server start, RAAT reconnect, playback resume,
+database recovery, extension reconnect and restored remote connectivity close the
+corresponding incident immediately. When Roon does not emit a recovery line, a
+domain-specific quiet period moves the incident through monitoring and recovery.
+This lets the current Health state recover without deleting the historical
+explanation.
+
+The app learns adaptive local baselines for Roon physical/process memory, CPU,
+open files, disk throughput and GC pause activity. Compact five-minute samples
+and baseline state are persisted, so learning continues across app restarts
+without retaining raw logs. The current predictions cover:
+
+- physical memory that keeps rising without returning to baseline;
+- sustained GC pause pressure or CPU load;
+- open-file growth and sustained disk activity;
+- recurring endpoint-specific incidents within 24 hours.
+
+Each prediction includes its confidence, observation window, current and baseline
+values, trend where applicable and the evidence used for the conclusion. A
+prediction is a warning sign, not a claim that a failure is certain.
+
 ## Roon Health Score
 
 Roon Health starts at `100`. Each active health signal contributes an impact
-value. The total impact is capped at `100`, then subtracted:
+value. Signals belonging to the same correlated incident are combined using only
+their strongest impact. Memory threshold, growth, GC and system-pressure signals
+are likewise capped as one memory-pressure group. The effective total is capped
+at `100`, then subtracted:
 
 ```text
-score = max(0, 100 - min(100, sum(signal impacts)))
+score = max(0, 100 - min(100, sum(grouped effective impacts)))
 ```
 
 The state is derived from both score and severity:
@@ -154,26 +204,34 @@ Default signal weights:
 | RAAT | latest state disconnected | 12 |
 | Playback | timeout/failure warning burst | up to 24 |
 | Playback | heavy repeated playback instability | up to 32 |
+| Diagnostics | active correlated incident | strongest domain impact only |
+| Predictions | explainable warning-level developing trend | up to 14 |
 | Memory | near threshold at 92% / over threshold without macOS pressure | 0 |
 | Memory | near threshold with swap pressure | 8 |
 | Memory | over threshold with swap pressure or high system share | 12 / 28 |
 | Memory | growth over the configured window without pressure / with pressure | 0 / 14 |
 | System | high Roon process CPU | 14 |
 | System | high Roon process memory without pressure / with pressure | 0 / 14 |
-| System | macOS swap warning / critical | 24 / 42 |
+| System | active macOS swap-out warning / critical | 24 / 42 |
 | Disk | low / critical free log-volume space | 14 / 34 |
 
 The important detail is that not every Roon `Error` text is treated as equally
 dangerous. A plain playback buffering line, image fetch retry, transient SQLite
 busy message or a track title containing words such as `Crash` should not
 collapse the score to zero. Memory is also weighted against real macOS pressure:
-high Roon memory alone is treated as an observation when swap usage is low and
-the system still has headroom.
+high Roon memory alone is treated as an observation when no active swap-out
+pressure is visible and the system still has headroom.
 
-Swap is the strongest memory-pressure signal. By default, macOS swap usage of
-about `256 MB` or `10%` is warning-level; about `1024 MB` or `50%` is critical.
-Roon process memory becomes health-relevant when it represents a very high share
-of physical RAM, or when swap pressure is already visible.
+Resolved incidents contribute a recovery signal with zero impact and suppress
+stale raw warnings from the same episode. Known maintenance can also suppress
+secondary RAAT, playback or database noise while the maintenance incident itself
+remains visible. This keeps one real episode from being counted several times.
+
+Swap activity is the strongest memory-pressure signal. Allocated swap by itself
+is informational because macOS can keep it allocated after pressure has ended.
+New swap-outs become warning-level at about `0.05 MB/s` and critical at about
+`5 MB/s`. Roon process memory also becomes health-relevant when it represents a
+very high share of physical RAM.
 
 ## Log Message Weighting
 
@@ -182,7 +240,9 @@ classification wins over plain text severity:
 
 - `info`: memory samples, file-cache status, normal playback activity, RAAT
   reconnect/connect events, plain buffering, database maintenance and image
-  fetch retries that still have attempts left.
+  fetch retries that still have attempts left. Known operational messages such as
+  successful ML Radio status, missing optional waveform data, completed backup
+  cleanup and routine AirPlay disconnects also remain informational.
 - `warning`: playback timeout, failed, dropped or network-error lines; RAAT
   transport lost, device lost or disconnected lines; server stopped; retryable or
   generic exceptions; SQLite busy, locked database, slow query, timeout, rollback
@@ -192,8 +252,10 @@ classification wins over plain text severity:
 
 If a line is interesting but does not match a domain parser, it becomes a
 highlighted log event. Fallback weighting uses conservative keywords:
-`fatal`, `crash` and `corrupt` become critical; `warning`, `timeout`, `failed`
-and `disconnect` become warning; other highlighted lines remain informational.
+explicit fatal errors, Roon/server crash markers and corruption become critical;
+`warning`, `timeout`, `failed` and `disconnect` become warning; other highlighted
+lines remain informational. Ordinary metadata containing words such as `Crash`
+or `Panic` is not sufficient for a server-failure classification.
 
 The health evaluator then applies windowed thresholds. Plain buffering and normal
 RAAT reconnect activity stay informational. Playback timeout/failure warnings are
@@ -201,6 +263,10 @@ warning-level by default and become critical only after a much larger repeated
 burst. RAAT transport interruptions use warning and critical disconnect counts.
 Database corruption is immediately critical, while SQLite busy/locked activity is
 warning-level and capped.
+
+Critical server exceptions affect Health only inside the configured event window.
+They remain available in the alert history but no longer keep the current Health
+state critical indefinitely.
 
 Playback status lines are parsed before generic server-error fallbacks. This
 prevents normal track metadata such as a song title containing `Crash` from being
@@ -221,7 +287,7 @@ Currently active settings:
 
 - `language` (`de` or `en`)
 - `dashboardPort`
-- `pollIntervalSeconds`
+- `pollIntervalSeconds` (5-30 second safety poll; normal log updates are event-driven)
 - `baseDirectory`
 - `autoDiscoverRoonLogDirectories`
 - `logDirectories`
@@ -238,6 +304,11 @@ Currently active settings:
 - `healthRules`
 - `sendMacNotifications`
 - `showAllLogLines`
+
+Saved settings are applied to the running store and watcher immediately, except
+for `dashboardPort`, which still requires an app restart. When `showAllLogLines`
+is disabled, ordinary lines still update source freshness but only lines producing
+parser events are retained in the live/history views.
 
 The main health-rule defaults are:
 
@@ -268,6 +339,54 @@ swift test
 ```
 
 ## Changelog
+
+### [v0.2.0](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.2.0) - Diagnostics, Predictions and Runtime Efficiency - 2026-07-10
+
+- Reworked live log tailing with bounded chunk reads, UTF-8-safe partial-line
+  buffering, oversized-line protection, rotation/truncation detection and
+  event-driven file notifications with a low-frequency safety poll.
+- Replaced shifting bounded arrays with ring buffers, removed the duplicate live
+  log buffer and reduced per-line file metadata work.
+- Reduced the in-memory memory-analysis context from seven days to a compact
+  ten-minute raw-line window. Completed memory insights remain available for the
+  full seven-day analysis period, while classification is deferred until a jump
+  actually occurs.
+- Added incremental log-volume buckets plus cached Health and 24-hour memory
+  trend calculations to avoid repeatedly scanning and sorting complete histories.
+- Replaced recurring `pgrep`, `ps` and `sysctl` helper processes with direct
+  macOS process and swap APIs; delayed and compacted memory-insight persistence.
+- Applied saved configuration and retention changes immediately; implemented the
+  previously inactive `showAllLogLines` option.
+- Reduced dashboard refresh traffic with compact snapshots, incremental log
+  deltas and on-demand full collections for alerts, memory insights and playback;
+  closed collection views now release their downloaded rows and rendered DOM.
+- Changed memory pressure scoring so allocated swap is informational unless new
+  swap-outs show active pressure; Swap-out rates are visible in Health Details.
+- Limited critical server exceptions to the configured event window, returned
+  every signal used by the Health score and tightened fatal keyword parsing.
+- Added nearest-year timestamp handling, reliable asynchronous port fallback and
+  overflow-safe port candidates.
+- Added a persistent incident engine that correlates related database, server,
+  RAAT, playback, extension/API, remote-access and device messages instead of
+  treating each log line as a separate problem.
+- Added explicit recovery detection, quiet-period recovery and incident-level
+  Health caps so secondary messages from one episode cannot multiply the score
+  penalty.
+- Parsed current Roon GC-committed, managed-live, native and GC-pause statistics
+  and exposed them in the resource panel and diagnostic snapshots.
+- Improved memory-jump attribution with before/after timing, large API payload
+  weighting, maintenance/extension/remote categories and redacted byte-counted
+  evidence.
+- Added persisted adaptive baselines and explainable predictions for slow memory
+  growth, GC pressure, sustained CPU/disk load, open-file growth and recurring
+  incidents.
+- Added the **Diagnostics & Predictions** sidebar and a searchable seven-day
+  incident collection with state, recovery and expandable evidence.
+- Made the left runtime, source and resource rail substantially more compact so
+  all rows fit in a typical desktop-height window, with independent scrolling as
+  a fallback for smaller browser windows.
+- Expanded regression coverage to 66 tests and removed strict Swift concurrency
+  warnings.
 
 ### [v0.1.4](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.1.4) - Smarter Memory Pressure and Disk I/O - 2026-06-30
 

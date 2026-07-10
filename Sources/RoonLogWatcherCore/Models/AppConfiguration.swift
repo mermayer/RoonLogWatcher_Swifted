@@ -1,6 +1,6 @@
 import Foundation
 
-public enum AppLanguage: String, Codable, Equatable {
+public enum AppLanguage: String, Codable, Equatable, Sendable {
     case english = "en"
     case german = "de"
 
@@ -9,7 +9,7 @@ public enum AppLanguage: String, Codable, Equatable {
     }
 }
 
-public struct AppConfiguration: Codable, Equatable {
+public struct AppConfiguration: Codable, Equatable, Sendable {
     public var language: AppLanguage
     public var baseDirectory: String
     public var autoDiscoverRoonLogDirectories: Bool
@@ -35,7 +35,7 @@ public struct AppConfiguration: Codable, Equatable {
         baseDirectory: String = "/Volumes/Data",
         autoDiscoverRoonLogDirectories: Bool = true,
         logDirectories: [String] = [],
-        pollIntervalSeconds: Double = 0.75,
+        pollIntervalSeconds: Double = 5,
         dashboardPort: UInt16 = 17666,
         enableDemoModeWhenNoLogs: Bool = true,
         watchExistingLogsFromEnd: Bool = true,
@@ -123,7 +123,7 @@ public struct AppConfiguration: Codable, Equatable {
     public func normalized() -> AppConfiguration {
         var copy = self
         copy.baseDirectory = copy.baseDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        copy.pollIntervalSeconds = min(30, max(0.25, copy.pollIntervalSeconds))
+        copy.pollIntervalSeconds = min(30, max(5, copy.pollIntervalSeconds))
         copy.dashboardPort = UInt16(min(65535, max(1024, Int(copy.dashboardPort))))
         copy.fileNameIncludes = copy.fileNameIncludes
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
@@ -149,7 +149,7 @@ public struct AppConfiguration: Codable, Equatable {
     }
 }
 
-public struct MemoryAlertConfiguration: Codable, Equatable {
+public struct MemoryAlertConfiguration: Codable, Equatable, Sendable {
     public var enabled: Bool
     public var physicalMemoryMB: Double
     public var unmanagedMemoryMB: Double
@@ -188,7 +188,7 @@ public struct MemoryAlertConfiguration: Codable, Equatable {
     }
 }
 
-public struct HealthRuleConfiguration: Codable, Equatable {
+public struct HealthRuleConfiguration: Codable, Equatable, Sendable {
     public var logStaleWarningSeconds: Double
     public var logStaleCriticalSeconds: Double
     public var eventWindowMinutes: Double

@@ -26,7 +26,7 @@ final class AppConfigurationTests: XCTestCase {
         let reloaded = AppConfigStore(configURL: url)
         XCTAssertEqual(reloaded.configuration.dashboardPort, 17677)
         XCTAssertEqual(reloaded.configuration.language, .german)
-        XCTAssertEqual(reloaded.configuration.pollIntervalSeconds, 0.25)
+        XCTAssertEqual(reloaded.configuration.pollIntervalSeconds, 5)
         XCTAssertEqual(reloaded.configuration.logVolumeWindowMinutes, 180)
         XCTAssertEqual(reloaded.configuration.logHistoryMaxLines, 800)
         XCTAssertEqual(reloaded.configuration.maxLogLineCharacters, 300)
@@ -183,6 +183,7 @@ final class AppConfigurationTests: XCTestCase {
         nextConfig.logVolumeWindowMinutes = 360
         nextConfig.logHistoryMaxLines = 700
         nextConfig.maxLogLineCharacters = 150
+        nextConfig.showAllLogLines = false
 
         var request = URLRequest(url: baseURL.appendingPathComponent("api/config"))
         request.httpMethod = "POST"
@@ -193,11 +194,20 @@ final class AppConfigurationTests: XCTestCase {
         XCTAssertEqual(postResponse.response.statusCode, 200)
         let saved = try decoder.decode(ConfigDocument.self, from: postResponse.data)
         XCTAssertEqual(saved.config.language, .german)
-        XCTAssertEqual(saved.config.pollIntervalSeconds, 0.25)
+        XCTAssertEqual(saved.config.pollIntervalSeconds, 5)
         XCTAssertEqual(saved.config.logVolumeWindowMinutes, 360)
         XCTAssertEqual(saved.config.logHistoryMaxLines, 700)
         XCTAssertEqual(saved.config.maxLogLineCharacters, 200)
         XCTAssertEqual(AppConfigStore(configURL: configURL).configuration.language, .german)
+
+        runtimeStore.ingest(
+            file: "/tmp/RoonServer_log.txt",
+            line: "Trace: ordinary line",
+            events: [],
+            mode: .live
+        )
+        XCTAssertTrue(runtimeStore.snapshot().recentLogs.isEmpty)
+        XCTAssertNotNil(runtimeStore.snapshot().health.lastLogAt)
     }
 
     func testDiscovererUsesManualConfiguredDirectory() throws {

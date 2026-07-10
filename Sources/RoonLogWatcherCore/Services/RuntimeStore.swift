@@ -2,13 +2,13 @@ import Foundation
 
 public final class RuntimeStore {
     private let lock = NSLock()
-    private let configuration: AppConfiguration
+    private var configuration: AppConfiguration
     private let runStartedAt = Date()
     private var mode: RuntimeMode = .idle
     private var dashboardURL: String?
     private var sequence = 0
-    private var recentLogs: BoundedArray<LogLine>
     private var logHistory: BoundedArray<LogLine>
+    private var lastReceivedLog: LogLine?
     private var timeline = BoundedArray<RuntimeEvent>(limit: 1_000)
     private var alerts = BoundedArray<RuntimeEvent>(limit: 500)
     private var playback = BoundedArray<RuntimeEvent>(limit: 240)
@@ -16,29 +16,48 @@ public final class RuntimeStore {
     private var memoryHistory = BoundedArray<MemoryMetric>(limit: 5_760)
     private var physicalMemoryTrendHistory = BoundedArray<MemoryTrendPoint>(limit: 2_880)
     private var processMemoryHistory = BoundedArray<MemoryTrendPoint>(limit: 2_880)
-    private var memoryContextHistory = BoundedArray<MemoryInsightEvidence>(limit: 20_000)
+    private var memoryContextHistory = BoundedArray<MemoryContextLine>(limit: 4_000)
     private var memoryInsights = BoundedArray<MemoryInsight>(limit: 1_000)
     private var lastMemoryStatsSample: MemoryStatsSample?
     private var sources: [String: WatchedSource] = [:]
+    private var sourceMetadataRefreshedAt: [String: Date] = [:]
     private var systemStatus: LocalSystemStatus?
     private var healthTrend = BoundedArray<RoonHealthTrendPoint>(limit: 2_880)
     private var recentAlertKeys: [String: Date] = [:]
     private var processedLines = 0
     private var warningCount = 0
     private var criticalCount = 0
+    private var logVolumeSlices: [Int: LogVolumeCounts] = [:]
+    private var healthRevision = 0
+    private var cachedHealth: CachedHealth?
+    private var memoryTrendRevision = 0
+    private var cachedMemoryTrend: CachedMemoryTrend?
+    private let diagnosticEngine: DiagnosticAnalysisEngine
     private let memoryInsightStoreURL: URL?
+    private let memoryInsightPersistence = MemoryInsightPersistence()
+    private let timestampParser = RoonLogTimestampParser()
     private let alertSnapshotWindow: TimeInterval = 12 * 60 * 60
     private let memoryTrendMinimumSampleInterval: TimeInterval = 30
     private let memoryInsightRetention: TimeInterval = 7 * 24 * 60 * 60
+    private let memoryContextRetention: TimeInterval = 10 * 60
     private let memoryInsightContextWindow: TimeInterval = 2 * 60
+    private let memoryInsightPruneInterval: TimeInterval = 60
+    private let sourceMetadataRefreshInterval: TimeInterval = 5
+    private var lastMemoryInsightPruneAt = Date.distantPast
     private let memoryJumpPhysicalThresholdMB: Double = 150
     private let memoryJumpManagedThresholdMB: Double = 250
     private let memoryJumpUnmanagedThresholdMB: Double = 250
+    private let diagnosticPersistenceInterval: TimeInterval = 30 * 60
+    private var lastDiagnosticPersistenceScheduledAt = Date.distantPast
+    private let healthCacheInterval: TimeInterval = 10
+    private let memoryTrendCacheInterval: TimeInterval = 60
+    private let logVolumeSliceSeconds: TimeInterval = 15
+    private let maximumLogVolumeWindow: TimeInterval = 6 * 60 * 60
 
     public init(configuration: AppConfiguration = .default, memoryInsightStoreURL: URL? = nil) {
         self.configuration = configuration.normalized()
         self.memoryInsightStoreURL = memoryInsightStoreURL
-        self.recentLogs = BoundedArray<LogLine>(limit: self.configuration.recentLogMaxLines)
+        self.diagnosticEngine = DiagnosticAnalysisEngine()
         self.logHistory = BoundedArray<LogLine>(limit: self.configuration.logHistoryMaxLines)
         loadMemoryInsights()
     }
@@ -49,15 +68,40 @@ public final class RuntimeStore {
         }
     }
 
+    public func updateConfiguration(_ newConfiguration: AppConfiguration) {
+        lock.withLock {
+            let normalized = newConfiguration.normalized()
+            configuration = normalized
+            logHistory.resize(to: normalized.logHistoryMaxLines)
+            rebuildLogVolumeSlices()
+            invalidateHealth()
+        }
+    }
+
+    public func flushPersistence() {
+        let persistenceRequest = lock.withLock { () -> (MemoryInsightDocument, URL)? in
+            guard let memoryInsightStoreURL else { return nil }
+            return (persistenceDocument(now: Date()), memoryInsightStoreURL)
+        }
+        if let (document, url) = persistenceRequest {
+            memoryInsightPersistence.saveImmediately(document: document, at: url)
+        }
+    }
+
     public func setMode(_ newMode: RuntimeMode) {
         lock.withLock {
-            mode = newMode
+            if mode != newMode {
+                mode = newMode
+                invalidateHealth()
+            }
         }
     }
 
     public func updateSystemStatus(_ status: LocalSystemStatus) {
         lock.withLock {
             systemStatus = status
+            diagnosticEngine.updateSystem(status)
+            invalidateHealth()
             if status.totalMemoryMB > 0 {
                 processMemoryHistory.append(MemoryTrendPoint(
                     time: status.sampledAt,
@@ -65,6 +109,12 @@ public final class RuntimeStore {
                     valueMB: status.totalMemoryMB,
                     source: "macOS process sampler"
                 ))
+                memoryTrendRevision += 1
+                cachedMemoryTrend = nil
+            }
+            if status.sampledAt.timeIntervalSince(lastDiagnosticPersistenceScheduledAt) >= diagnosticPersistenceInterval {
+                lastDiagnosticPersistenceScheduledAt = status.sampledAt
+                scheduleMemoryInsightsSave()
             }
         }
     }
@@ -73,6 +123,7 @@ public final class RuntimeStore {
         lock.withLock {
             let currentFileSet = Set(files)
             sources = sources.filter { currentFileSet.contains($0.key) }
+            sourceMetadataRefreshedAt = sourceMetadataRefreshedAt.filter { currentFileSet.contains($0.key) }
             for file in files {
                 let key = file
                 if sources[key] == nil {
@@ -84,6 +135,7 @@ public final class RuntimeStore {
                         lastSeenAt: nil,
                         status: "watching"
                     )
+                    sourceMetadataRefreshedAt[key] = Date()
                 } else if var source = sources[key] {
                     source = sourceMetadata(
                         id: key,
@@ -96,18 +148,23 @@ public final class RuntimeStore {
                     sources[key] = source
                 }
             }
+            invalidateHealth()
         }
     }
 
     public func ingest(file: String, line: String, events: [RuntimeEvent], mode newMode: RuntimeMode) {
         lock.withLock {
-            mode = newMode
+            let wasFirstLine = processedLines == 0
+            if mode != newMode {
+                mode = newMode
+                invalidateHealth()
+            }
             processedLines += 1
             sequence += 1
 
             let now = Date()
             let severity = events.map(\.severity).maxSeverity ?? .info
-            let sourceName = Self.displaySourceName(file)
+            let sourceName = sources[file]?.name ?? Self.displaySourceName(file)
             let entry = LogLine(
                 id: sequence,
                 receivedAt: now,
@@ -115,14 +172,22 @@ public final class RuntimeStore {
                 text: Self.truncatedLogLine(line, maxCharacters: configuration.maxLogLineCharacters),
                 severity: severity
             )
-            recentLogs.append(entry)
-            logHistory.append(entry)
-            if let context = Self.memoryContextEvidence(
-                line: line,
-                source: sourceName,
-                time: Self.extractTimestamp(from: line) ?? events.first?.time ?? now,
-                maxCharacters: configuration.maxLogLineCharacters
-            ) {
+            lastReceivedLog = entry
+            if configuration.showAllLogLines || !events.isEmpty {
+                let evicted = logHistory.appendEvicting(entry)
+                appendLogVolume(entry)
+                if let evicted {
+                    removeLogVolume(evicted)
+                }
+            }
+
+            if !events.contains(where: { $0.domain == "memory" }) {
+                let context = MemoryContextLine(
+                    time: events.first?.time ?? timestampParser.parse(line, relativeTo: now) ?? now,
+                    message: Self.truncatedLogLine(line, maxCharacters: min(configuration.maxLogLineCharacters, 600)),
+                    source: sourceName,
+                    byteCount: line.utf8.count
+                )
                 memoryContextHistory.append(context)
                 updateMemoryInsights(with: context, now: now)
             }
@@ -138,10 +203,18 @@ public final class RuntimeStore {
             source.lineCount += 1
             source.lastSeenAt = now
             source.status = newMode == .demo ? "demo" : "live"
-            source.lastModifiedAt = Self.modificationDate(file)
-            source.fileSizeBytes = Self.fileSize(file)
-            source.isReadable = FileManager.default.isReadableFile(atPath: file)
+            if shouldRefreshSourceMetadata(file: file, now: now) {
+                let metadata = Self.fileMetadata(file)
+                source.lastModifiedAt = metadata?.modificationDate
+                source.fileSizeBytes = metadata?.size
+                source.isReadable = FileManager.default.isReadableFile(atPath: file)
+                sourceMetadataRefreshedAt[file] = now
+            }
             sources[file] = source
+
+            if wasFirstLine || events.contains(where: Self.eventAffectsHealth) {
+                invalidateHealth()
+            }
 
             for event in events {
                 timeline.append(event)
@@ -175,6 +248,7 @@ public final class RuntimeStore {
             if let sample = Self.memoryStatsSample(from: events, source: sourceName) {
                 appendMemoryInsightIfNeeded(sample: sample, now: now)
             }
+            diagnosticEngine.ingest(events: events, line: line, receivedAt: now, source: sourceName)
             pruneMemoryInsightHistory(now: now)
         }
     }
@@ -197,49 +271,91 @@ public final class RuntimeStore {
             if severity != .info {
                 alerts.append(event)
             }
+            invalidateHealth()
         }
     }
 
     public func snapshot() -> RuntimeSnapshot {
         lock.withLock {
-            let now = Date()
-            let sortedSources = sources.values.sorted { $0.name < $1.name }
-            let sortedMemory = memoryByMetric.values.sorted { $0.metric < $1.metric }
-            let health = RoonHealthEvaluator(configuration: configuration).evaluate(
-                now: now,
-                mode: mode,
-                sources: sortedSources,
-                logs: logHistory.items,
-                events: timeline.items,
-                memory: sortedMemory,
-                memoryHistory: memoryHistory.items,
-                system: systemStatus,
-                processedLines: processedLines
-            )
-            appendHealthTrendIfNeeded(health, now: now)
-            return RuntimeSnapshot(
-                ok: true,
-                appName: "Roon Log Watcher",
-                mode: mode,
-                generatedAt: now,
-                runStartedAt: runStartedAt,
-                dashboardURL: dashboardURL,
-                healthScore: health.score,
-                health: health,
-                healthTrend: healthTrend.items,
-                memoryTrend24h: memoryTrend24h(now: now),
-                memoryInsights: visibleMemoryInsights(now: now),
-                system: systemStatus,
-                watchedSources: sortedSources,
-                memory: sortedMemory,
-                recentLogs: recentLogs.items.reversed(),
-                volumeBuckets: volumeBuckets(now: now),
-                timeline: Array(timeline.items.suffix(240).reversed()),
-                alerts: visibleAlerts(now: now),
-                playback: playback.items.reversed(),
-                counters: currentCounters()
-            )
+            makeSnapshot(now: Date(), compact: false, logsAfterID: nil)
         }
+    }
+
+    public func liveSnapshot(logsAfterID: Int? = nil) -> RuntimeSnapshot {
+        lock.withLock {
+            makeSnapshot(now: Date(), compact: true, logsAfterID: logsAfterID)
+        }
+    }
+
+    public func alertCollection() -> [RuntimeEvent] {
+        lock.withLock {
+            visibleAlerts(now: Date())
+        }
+    }
+
+    public func memoryInsightCollection() -> [MemoryInsight] {
+        lock.withLock {
+            visibleMemoryInsights(now: Date())
+        }
+    }
+
+    public func playbackCollection() -> [RuntimeEvent] {
+        lock.withLock {
+            Array(playback.items.reversed())
+        }
+    }
+
+    public func incidentCollection() -> [DiagnosticIncident] {
+        lock.withLock {
+            diagnosticEngine.incidentCollection(now: Date())
+        }
+    }
+
+    private func makeSnapshot(now: Date, compact: Bool, logsAfterID: Int?) -> RuntimeSnapshot {
+        let sortedSources = sources.values.sorted { $0.name < $1.name }
+        let sortedMemory = memoryByMetric.values.sorted { $0.metric < $1.metric }
+        let fullDiagnostics = diagnosticEngine.snapshot(now: now, compact: false)
+        let health = currentHealth(now: now, sources: sortedSources, memory: sortedMemory, diagnostics: fullDiagnostics)
+
+        let visibleInsights = visibleMemoryInsights(now: now)
+        let allAlerts = visibleAlerts(now: now)
+        let allPlayback = Array(playback.items.reversed())
+        let diagnostics = compact ? diagnosticEngine.snapshot(now: now, compact: true) : fullDiagnostics
+        let orderedRecentLogs = Array(
+            logHistory.orderedSuffix(configuration.recentLogMaxLines).reversed()
+        )
+        let returnedLogs = logsAfterID.map { id in
+            orderedRecentLogs.filter { $0.id > id }
+        } ?? orderedRecentLogs
+
+        return RuntimeSnapshot(
+            ok: true,
+            appName: "Roon Log Watcher",
+            mode: mode,
+            generatedAt: now,
+            runStartedAt: runStartedAt,
+            dashboardURL: dashboardURL,
+            healthScore: health.score,
+            health: health,
+            healthTrend: compact ? Array(healthTrend.items.suffix(48)) : healthTrend.items,
+            memoryTrend24h: memoryTrend24h(now: now),
+            memoryInsights: compact ? Array(visibleInsights.prefix(3)) : visibleInsights,
+            memoryInsightTotalCount: visibleInsights.count,
+            system: systemStatus,
+            watchedSources: sortedSources,
+            memory: sortedMemory,
+            recentLogs: returnedLogs,
+            volumeBuckets: volumeBuckets(now: now),
+            timeline: compact ? [] : Array(timeline.items.suffix(240).reversed()),
+            alerts: compact ? compactAlertPreview(allAlerts) : allAlerts,
+            alertTotalCount: allAlerts.count,
+            warningAlertTotalCount: allAlerts.filter { $0.severity == .warning }.count,
+            criticalAlertTotalCount: allAlerts.filter { $0.severity == .critical }.count,
+            playback: compact ? Array(allPlayback.prefix(12)) : allPlayback,
+            playbackTotalCount: allPlayback.count,
+            diagnostics: diagnostics,
+            counters: currentCounters()
+        )
     }
 
     public func statusSummary() -> RuntimeStatusSummary {
@@ -247,18 +363,8 @@ public final class RuntimeStore {
             let now = Date()
             let sortedSources = sources.values.sorted { $0.name < $1.name }
             let sortedMemory = memoryByMetric.values.sorted { $0.metric < $1.metric }
-            let health = RoonHealthEvaluator(configuration: configuration).evaluate(
-                now: now,
-                mode: mode,
-                sources: sortedSources,
-                logs: logHistory.items,
-                events: timeline.items,
-                memory: sortedMemory,
-                memoryHistory: memoryHistory.items,
-                system: systemStatus,
-                processedLines: processedLines
-            )
-            appendHealthTrendIfNeeded(health, now: now)
+            let diagnostics = diagnosticEngine.snapshot(now: now, compact: false)
+            let health = currentHealth(now: now, sources: sortedSources, memory: sortedMemory, diagnostics: diagnostics)
             return RuntimeStatusSummary(
                 mode: mode,
                 healthScore: health.score,
@@ -267,6 +373,59 @@ public final class RuntimeStore {
                 counters: currentCounters()
             )
         }
+    }
+
+    private func currentHealth(
+        now: Date,
+        sources: [WatchedSource],
+        memory: [MemoryMetric],
+        diagnostics: DiagnosticAnalysisSnapshot
+    ) -> RoonHealth {
+        if let cache = cachedHealth,
+           cache.revision == healthRevision,
+           now < cache.validUntil {
+            return refreshedHealth(cache.health, now: now)
+        }
+
+        let health = RoonHealthEvaluator(configuration: configuration).evaluate(
+            now: now,
+            mode: mode,
+            sources: sources,
+            latestLog: lastReceivedLog,
+            events: timeline.items,
+            memory: memory,
+            memoryHistory: memoryHistory.items,
+            system: systemStatus,
+            processedLines: processedLines,
+            diagnostics: diagnostics
+        )
+        cachedHealth = CachedHealth(
+            revision: healthRevision,
+            validUntil: now.addingTimeInterval(healthCacheInterval),
+            health: health
+        )
+        appendHealthTrendIfNeeded(health, now: now)
+        return health
+    }
+
+    private func refreshedHealth(_ health: RoonHealth, now: Date) -> RoonHealth {
+        var refreshed = health
+        refreshed.evaluatedAt = now
+        refreshed.lastLogAt = lastReceivedLog?.receivedAt
+        refreshed.lastLogAgeSeconds = lastReceivedLog.map { max(0, now.timeIntervalSince($0.receivedAt)) }
+
+        if let latestLog = lastReceivedLog,
+           let index = refreshed.signals.firstIndex(where: { $0.domain == "logs" }) {
+            refreshed.signals[index].observedAt = latestLog.receivedAt
+            refreshed.signals[index].ageSeconds = max(0, now.timeIntervalSince(latestLog.receivedAt))
+            refreshed.signals[index].source = latestLog.source
+        }
+        return refreshed
+    }
+
+    private func invalidateHealth() {
+        healthRevision &+= 1
+        cachedHealth = nil
     }
 
     public func logExportText() -> String {
@@ -302,9 +461,19 @@ public final class RuntimeStore {
             .sorted { $0.time > $1.time }
     }
 
+    private func compactAlertPreview(_ allAlerts: [RuntimeEvent]) -> [RuntimeEvent] {
+        let candidates = Array(allAlerts.prefix(24))
+            + Array(allAlerts.filter { $0.severity == .warning }.prefix(8))
+            + Array(allAlerts.filter { $0.severity == .critical }.prefix(8))
+        var seen: Set<String> = []
+        return candidates
+            .filter { seen.insert($0.id).inserted }
+            .sorted { $0.time > $1.time }
+    }
+
     private func appendHealthTrendIfNeeded(_ health: RoonHealth, now: Date) {
         let sample = RoonHealthTrendPoint(time: now, score: health.score, state: health.state)
-        guard let previous = healthTrend.items.last else {
+        guard let previous = healthTrend.last else {
             healthTrend.append(sample)
             return
         }
@@ -344,26 +513,57 @@ public final class RuntimeStore {
             )
         }
 
-        for line in logHistory.items {
-            guard line.receivedAt >= start && line.receivedAt <= end else { continue }
+        for (slice, counts) in logVolumeSlices {
+            let receivedAt = Date(timeIntervalSince1970: TimeInterval(slice) * logVolumeSliceSeconds)
+            guard receivedAt >= start && receivedAt <= end else { continue }
             let index = min(
                 safeBucketCount - 1,
-                max(0, Int(line.receivedAt.timeIntervalSince(start) / bucketSeconds))
+                max(0, Int(receivedAt.timeIntervalSince(start) / bucketSeconds))
             )
-            buckets[index].total += 1
-            switch line.severity {
-            case .warning:
-                buckets[index].warning += 1
-            case .critical:
-                buckets[index].critical += 1
-            case .info:
-                break
-            }
+            buckets[index].total += counts.total
+            buckets[index].warning += counts.warning
+            buckets[index].critical += counts.critical
         }
         return buckets
     }
 
+    private func appendLogVolume(_ line: LogLine) {
+        let slice = Int(floor(line.receivedAt.timeIntervalSince1970 / logVolumeSliceSeconds))
+        var counts = logVolumeSlices[slice] ?? LogVolumeCounts()
+        counts.total += 1
+        if line.severity == .warning { counts.warning += 1 }
+        if line.severity == .critical { counts.critical += 1 }
+        logVolumeSlices[slice] = counts
+    }
+
+    private func removeLogVolume(_ line: LogLine) {
+        let slice = Int(floor(line.receivedAt.timeIntervalSince1970 / logVolumeSliceSeconds))
+        guard var counts = logVolumeSlices[slice] else { return }
+        counts.total = max(0, counts.total - 1)
+        if line.severity == .warning { counts.warning = max(0, counts.warning - 1) }
+        if line.severity == .critical { counts.critical = max(0, counts.critical - 1) }
+        if counts.total == 0 {
+            logVolumeSlices[slice] = nil
+        } else {
+            logVolumeSlices[slice] = counts
+        }
+    }
+
+    private func rebuildLogVolumeSlices() {
+        logVolumeSlices.removeAll(keepingCapacity: true)
+        for line in logHistory.items {
+            appendLogVolume(line)
+        }
+    }
+
     private func memoryTrend24h(now: Date, bucketCount: Int = 48) -> [MemoryTrendPoint] {
+        if let cache = cachedMemoryTrend,
+           cache.revision == memoryTrendRevision,
+           cache.bucketCount == bucketCount,
+           now < cache.validUntil {
+            return cache.points
+        }
+
         let windowStart = now.addingTimeInterval(-24 * 60 * 60)
         let processSamples = processMemoryHistory.items
             .filter { $0.time >= windowStart && $0.time <= now }
@@ -372,7 +572,15 @@ public final class RuntimeStore {
             .filter { $0.time >= windowStart && $0.time <= now }
             .sorted { $0.time < $1.time }
         let samples = physicalSamples.isEmpty ? processSamples : physicalSamples
-        guard samples.count > bucketCount else { return samples }
+        guard samples.count > bucketCount else {
+            cachedMemoryTrend = CachedMemoryTrend(
+                revision: memoryTrendRevision,
+                bucketCount: bucketCount,
+                validUntil: now.addingTimeInterval(memoryTrendCacheInterval),
+                points: samples
+            )
+            return samples
+        }
 
         let start = max(windowStart, samples.first?.time ?? windowStart)
         let bucketSeconds = max(1, now.timeIntervalSince(start)) / Double(max(1, bucketCount))
@@ -384,7 +592,14 @@ public final class RuntimeStore {
             )
             buckets[index] = sample
         }
-        return buckets.compactMap { $0 }
+        let points = buckets.compactMap { $0 }
+        cachedMemoryTrend = CachedMemoryTrend(
+            revision: memoryTrendRevision,
+            bucketCount: bucketCount,
+            validUntil: now.addingTimeInterval(memoryTrendCacheInterval),
+            points: points
+        )
+        return points
     }
 
     private func appendPhysicalMemoryTrendSampleIfNeeded(_ metric: MemoryMetric) {
@@ -395,13 +610,17 @@ public final class RuntimeStore {
             valueMB: metric.valueMB,
             source: metric.source
         )
-        guard let previous = physicalMemoryTrendHistory.items.last else {
+        guard let previous = physicalMemoryTrendHistory.last else {
             physicalMemoryTrendHistory.append(point)
+            memoryTrendRevision += 1
+            cachedMemoryTrend = nil
             return
         }
         if point.time < previous.time
             || point.time.timeIntervalSince(previous.time) >= memoryTrendMinimumSampleInterval {
             physicalMemoryTrendHistory.append(point)
+            memoryTrendRevision += 1
+            cachedMemoryTrend = nil
         }
     }
 
@@ -416,6 +635,8 @@ public final class RuntimeStore {
         let deltaManaged = sample.managedMB.flatMap { current in previous.managedMB.map { current - $0 } }
         let deltaUnmanaged = sample.unmanagedMB.flatMap { current in previous.unmanagedMB.map { current - $0 } }
         let deltaVirtual = sample.virtualMB.flatMap { current in previous.virtualMB.map { current - $0 } }
+        let deltaGCCommitted = sample.gcCommittedMB.flatMap { current in previous.gcCommittedMB.map { current - $0 } }
+        let deltaGCPause = sample.gcPauseWindowPercent.flatMap { current in previous.gcPauseWindowPercent.map { current - $0 } }
         let isJump = abs(deltaPhysical) >= memoryJumpPhysicalThresholdMB
             || abs(deltaManaged ?? 0) >= memoryJumpManagedThresholdMB
             || abs(deltaUnmanaged ?? 0) >= memoryJumpUnmanagedThresholdMB
@@ -440,16 +661,27 @@ public final class RuntimeStore {
             deltaManagedMB: deltaManaged,
             deltaUnmanagedMB: deltaUnmanaged,
             deltaVirtualMB: deltaVirtual,
-            relatedEvents: Array(related.prefix(6))
+            relatedEvents: Array(related.prefix(6)),
+            deltaGCCommittedMB: deltaGCCommitted,
+            deltaGCPauseWindowPercent: deltaGCPause
         )
         memoryInsights.append(insight)
-        saveMemoryInsights()
+        scheduleMemoryInsightsSave()
     }
 
-    private func updateMemoryInsights(with evidence: MemoryInsightEvidence, now: Date) {
+    private func updateMemoryInsights(with context: MemoryContextLine, now: Date) {
+        guard memoryInsights.containsInSuffix(8, where: {
+            abs(context.time.timeIntervalSince($0.observedAt)) <= memoryInsightContextWindow
+        })
+        else { return }
+
+        let existingInsights = memoryInsights.items
         var updated = false
-        let nextInsights = memoryInsights.items.map { insight -> MemoryInsight in
-            guard abs(evidence.time.timeIntervalSince(insight.observedAt)) <= memoryInsightContextWindow else {
+        let nextInsights = existingInsights.map { insight -> MemoryInsight in
+            guard abs(context.time.timeIntervalSince(insight.observedAt)) <= memoryInsightContextWindow else {
+                return insight
+            }
+            guard let evidence = Self.memoryContextEvidence(from: context, around: insight.observedAt) else {
                 return insight
             }
             guard !insight.relatedEvents.contains(where: { $0.time == evidence.time && $0.message == evidence.message }) else {
@@ -473,7 +705,7 @@ public final class RuntimeStore {
         if updated {
             memoryInsights.replace(with: nextInsights)
             pruneMemoryInsightHistory(now: now)
-            saveMemoryInsights()
+            scheduleMemoryInsightsSave()
         }
     }
 
@@ -481,7 +713,10 @@ public final class RuntimeStore {
         let start = date.addingTimeInterval(-memoryInsightContextWindow)
         let end = date.addingTimeInterval(memoryInsightContextWindow)
         return Self.sortedMemoryEvidence(
-            memoryContextHistory.items.filter { $0.time >= start && $0.time <= end },
+            memoryContextHistory.items.compactMap { context in
+                guard context.time >= start && context.time <= end else { return nil }
+                return Self.memoryContextEvidence(from: context, around: date)
+            },
             around: date
         )
     }
@@ -494,12 +729,17 @@ public final class RuntimeStore {
     }
 
     private func pruneMemoryInsightHistory(now: Date) {
+        guard now.timeIntervalSince(lastMemoryInsightPruneAt) >= memoryInsightPruneInterval else { return }
+        lastMemoryInsightPruneAt = now
         let cutoff = now.addingTimeInterval(-memoryInsightRetention)
-        let insightCount = memoryInsights.items.count
+        let contextCutoff = now.addingTimeInterval(-memoryContextRetention)
+        let volumeCutoff = Int(floor(now.addingTimeInterval(-maximumLogVolumeWindow - 60).timeIntervalSince1970 / logVolumeSliceSeconds))
+        let insightCount = memoryInsights.count
         memoryInsights.removeAll { $0.observedAt < cutoff }
-        memoryContextHistory.removeAll { $0.time < cutoff }
-        if memoryInsights.items.count != insightCount {
-            saveMemoryInsights()
+        memoryContextHistory.removeAll { $0.time < contextCutoff }
+        logVolumeSlices = logVolumeSlices.filter { $0.key >= volumeCutoff }
+        if memoryInsights.count != insightCount {
+            scheduleMemoryInsightsSave()
         }
     }
 
@@ -512,21 +752,24 @@ public final class RuntimeStore {
         guard let document = try? decoder.decode(MemoryInsightDocument.self, from: data) else { return }
         let cutoff = Date().addingTimeInterval(-memoryInsightRetention)
         memoryInsights.replace(with: document.insights.filter { $0.observedAt >= cutoff }.sorted { $0.observedAt < $1.observedAt })
+        if let diagnostics = document.diagnostics {
+            diagnosticEngine.restore(diagnostics)
+        }
     }
 
-    private func saveMemoryInsights() {
+    private func scheduleMemoryInsightsSave() {
         guard let memoryInsightStoreURL else { return }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let document = MemoryInsightDocument(insights: memoryInsights.items)
-        do {
-            try FileManager.default.createDirectory(at: memoryInsightStoreURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try encoder.encode(document)
-            try data.write(to: memoryInsightStoreURL, options: [.atomic])
-        } catch {
-            // Persistence is best-effort; live diagnostics should continue even if the cache cannot be written.
-        }
+        memoryInsightPersistence.schedule(
+            document: persistenceDocument(now: Date()),
+            at: memoryInsightStoreURL
+        )
+    }
+
+    private func persistenceDocument(now: Date) -> MemoryInsightDocument {
+        MemoryInsightDocument(
+            insights: memoryInsights.items,
+            diagnostics: diagnosticEngine.persistenceState(now: now)
+        )
     }
 
     private static func memoryStatsSample(from events: [RuntimeEvent], source: String) -> MemoryStatsSample? {
@@ -537,26 +780,42 @@ public final class RuntimeStore {
             source: source,
             physicalMB: physical,
             managedMB: memoryEvents.first(where: { $0.title == "Managed Memory" })?.valueMB,
-            unmanagedMB: memoryEvents.first(where: { $0.title == "Unmanaged Memory" })?.valueMB,
-            virtualMB: memoryEvents.first(where: { $0.title == "Virtual Memory" })?.valueMB
+            unmanagedMB: memoryEvents.first(where: { $0.title == "Unmanaged Memory" || $0.title == "Native Memory" })?.valueMB,
+            virtualMB: memoryEvents.first(where: { $0.title == "Virtual Memory" })?.valueMB,
+            gcCommittedMB: memoryEvents.first(where: { $0.title == "GC Committed Memory" })?.valueMB,
+            gcPauseWindowPercent: events.first(where: { $0.title == "GC Pause Window Percent" })?.numericValue
         )
     }
 
-    private static func memoryContextEvidence(line: String, source: String, time: Date, maxCharacters: Int) -> MemoryInsightEvidence? {
-        let lower = line.lowercased()
+    private static func eventAffectsHealth(_ event: RuntimeEvent) -> Bool {
+        event.severity != .info
+            || ["memory", "runtime", "server", "database", "raat", "playback", "device"].contains(event.domain)
+    }
+
+    private static func memoryContextEvidence(from context: MemoryContextLine, around date: Date) -> MemoryInsightEvidence? {
+        let lower = context.message.lowercased()
         guard !lower.contains("[stats]") else { return nil }
         guard let category = memoryContextCategory(lower) else { return nil }
         return MemoryInsightEvidence(
             id: UUID().uuidString,
-            time: time,
+            time: context.time,
             category: category,
             title: memoryCategoryTitle(category),
-            message: truncatedLogLine(line, maxCharacters: min(maxCharacters, 600)),
-            source: source
+            message: context.message,
+            source: context.source,
+            byteCount: context.byteCount,
+            relativeSeconds: context.time.timeIntervalSince(date),
+            relation: context.time <= date ? "before" : "after"
         )
     }
 
     private static func memoryContextCategory(_ lower: String) -> String? {
+        if containsAny(lower, ["[roonapi]", "[roonapi/registry]", "subscribe_queue", "continue subscribed", "apiclient"]) {
+            return "extension"
+        }
+        if containsAny(lower, ["[broker/database/vacuum]", "validating database", "finished validation", "[leveldb]"]) {
+            return "maintenance"
+        }
         if containsAny(lower, ["starting roon", "roonserver start", "server startup", "loaded 100", "loaded ", "cache entries", "adding storage location", "media availability", "initializing filebrowser", "created disabled location"]) {
             return "startup"
         }
@@ -578,6 +837,9 @@ public final class RuntimeStore {
         if containsAny(lower, ["database", "sqlite", "query", "checkpoint", "vacuum"]) {
             return "database"
         }
+        if containsAny(lower, ["[mobile]", "multinat", "remoteconnectivity", "port mapping"]) {
+            return "remote"
+        }
         if containsAny(lower, ["easyhttp", "timeout", "network", "api.roonlabs.net"]) {
             return "network"
         }
@@ -590,6 +852,8 @@ public final class RuntimeStore {
     private static func strongestMemoryCategory(from evidence: [MemoryInsightEvidence]) -> String {
         guard !evidence.isEmpty else { return "unknown" }
         let weights = [
+            "extension": 6,
+            "maintenance": 5,
             "startup": 4,
             "metadata": 4,
             "library": 3,
@@ -597,11 +861,21 @@ public final class RuntimeStore {
             "cache": 2,
             "playback": 2,
             "database": 2,
+            "remote": 1,
             "network": 1,
             "log": 1
         ]
-        let scores = evidence.reduce(into: [String: Int]()) { result, item in
-            result[item.category, default: 0] += weights[item.category, default: 1]
+        let scores = evidence.reduce(into: [String: Double]()) { result, item in
+            let relative = item.relativeSeconds ?? 0
+            let temporalWeight: Double
+            if relative <= 0 {
+                temporalWeight = abs(relative) <= 60 ? 2.0 : 1.25
+            } else {
+                temporalWeight = relative <= 30 ? 0.8 : 0.45
+            }
+            let bytes = Double(item.byteCount ?? 0)
+            let payloadWeight = 1 + min(4, log2(max(1, bytes / 1_024 + 1)))
+            result[item.category, default: 0] += Double(weights[item.category, default: 1]) * temporalWeight * payloadWeight
         }
         return scores.sorted {
             if $0.value == $1.value {
@@ -630,6 +904,8 @@ public final class RuntimeStore {
 
     private static func memoryCategoryTitle(_ category: String) -> String {
         switch category {
+        case "extension": return "Roon API synchronization"
+        case "maintenance": return "Database maintenance"
         case "startup": return "Startup / warm-up"
         case "metadata": return "Metadata update"
         case "library": return "Library work"
@@ -637,6 +913,7 @@ public final class RuntimeStore {
         case "cache": return "Cache / image work"
         case "playback": return "Playback / RAAT"
         case "database": return "Database activity"
+        case "remote": return "Remote access activity"
         case "network": return "Network/API activity"
         case "log": return "Log warning"
         default: return "Unknown"
@@ -644,7 +921,7 @@ public final class RuntimeStore {
     }
 
     private static func memoryCategoryRank(_ category: String) -> Int {
-        ["startup", "metadata", "library", "streaming", "cache", "playback", "database", "network", "log", "unknown"].firstIndex(of: category) ?? 99
+        ["extension", "maintenance", "startup", "metadata", "library", "streaming", "cache", "playback", "database", "remote", "network", "log", "unknown"].firstIndex(of: category) ?? 99
     }
 
     private static func containsAny(_ lower: String, _ patterns: [String]) -> Bool {
@@ -662,24 +939,10 @@ public final class RuntimeStore {
         }
     }
 
-    private static func extractTimestamp(from line: String) -> Date? {
-        guard let regex = try? NSRegularExpression(pattern: #"(\d{2})/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})"#),
-              let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)),
-              match.numberOfRanges == 6
-        else { return nil }
-
-        func value(_ index: Int) -> Int? {
-            guard let range = Range(match.range(at: index), in: line) else { return nil }
-            return Int(line[range])
-        }
-
-        var components = Calendar.current.dateComponents([.year], from: Date())
-        components.month = value(1)
-        components.day = value(2)
-        components.hour = value(3)
-        components.minute = value(4)
-        components.second = value(5)
-        return Calendar.current.date(from: components)
+    private func shouldRefreshSourceMetadata(file: String, now: Date) -> Bool {
+        guard !file.hasPrefix("/Demo/") else { return false }
+        guard let previous = sourceMetadataRefreshedAt[file] else { return true }
+        return now.timeIntervalSince(previous) >= sourceMetadataRefreshInterval
     }
 
     private func sourceMetadata(
@@ -690,15 +953,16 @@ public final class RuntimeStore {
         lastSeenAt: Date?,
         status: String
     ) -> WatchedSource {
-        WatchedSource(
+        let metadata = Self.fileMetadata(path)
+        return WatchedSource(
             id: id,
             path: path,
             name: name,
             lineCount: lineCount,
             lastSeenAt: lastSeenAt,
             status: status,
-            lastModifiedAt: Self.modificationDate(path),
-            fileSizeBytes: Self.fileSize(path),
+            lastModifiedAt: metadata?.modificationDate,
+            fileSizeBytes: metadata?.size,
             isReadable: FileManager.default.isReadableFile(atPath: path)
         )
     }
@@ -720,12 +984,12 @@ public final class RuntimeStore {
         return String(line.prefix(maxCharacters)) + " ... [truncated]"
     }
 
-    private static func fileSize(_ path: String) -> UInt64? {
-        ((try? FileManager.default.attributesOfItem(atPath: path)[.size]) as? NSNumber)?.uint64Value
-    }
-
-    private static func modificationDate(_ path: String) -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date
+    private static func fileMetadata(_ path: String) -> (size: UInt64?, modificationDate: Date?)? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
+        return (
+            (attributes[.size] as? NSNumber)?.uint64Value,
+            attributes[.modificationDate] as? Date
+        )
     }
 }
 
@@ -744,10 +1008,90 @@ private struct MemoryStatsSample {
     var managedMB: Double?
     var unmanagedMB: Double?
     var virtualMB: Double?
+    var gcCommittedMB: Double?
+    var gcPauseWindowPercent: Double?
 }
 
-private struct MemoryInsightDocument: Codable {
+private struct MemoryContextLine {
+    var time: Date
+    var message: String
+    var source: String
+    var byteCount: Int
+}
+
+private struct LogVolumeCounts {
+    var total = 0
+    var warning = 0
+    var critical = 0
+}
+
+private struct CachedHealth {
+    var revision: Int
+    var validUntil: Date
+    var health: RoonHealth
+}
+
+private struct CachedMemoryTrend {
+    var revision: Int
+    var bucketCount: Int
+    var validUntil: Date
+    var points: [MemoryTrendPoint]
+}
+
+private struct MemoryInsightDocument: Codable, Sendable {
     var insights: [MemoryInsight]
+    var diagnostics: DiagnosticPersistenceState? = nil
+}
+
+private final class MemoryInsightPersistence: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "RoonLogWatcher.MemoryInsightPersistence", qos: .utility)
+    private let lock = NSLock()
+    private var generation = 0
+    private var lastWrittenData: Data?
+
+    func schedule(document: MemoryInsightDocument, at url: URL) {
+        let scheduledGeneration = lock.withLock {
+            generation += 1
+            return generation
+        }
+
+        queue.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self,
+                  self.lock.withLock({ self.generation == scheduledGeneration })
+            else { return }
+
+            self.write(document: document, to: url)
+        }
+    }
+
+    func saveImmediately(document: MemoryInsightDocument, at url: URL) {
+        lock.withLock {
+            generation += 1
+        }
+        queue.sync {
+            write(document: document, to: url)
+        }
+    }
+
+    private func write(document: MemoryInsightDocument, to url: URL) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        do {
+            let data = try encoder.encode(document)
+            guard lock.withLock({ lastWrittenData != data }) else { return }
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: [.atomic])
+            lock.withLock {
+                lastWrittenData = data
+            }
+        } catch {
+            // Persistence is best-effort; live diagnostics should continue if the cache cannot be written.
+        }
+    }
 }
 
 private extension Array where Element == Severity {

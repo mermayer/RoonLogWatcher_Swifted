@@ -167,6 +167,16 @@ enum DashboardAssets {
               <button class="text-link" type="button" data-open-collection="alerts" data-i18n="link.viewAllAlerts">View all alerts...</button>
             </section>
 
+            <section class="section diagnostics-section">
+              <div class="section-title">
+                <h2 data-i18n="section.diagnostics">Diagnostics & Predictions</h2>
+                <span id="diagnosticCount" class="section-count">0</span>
+              </div>
+              <div id="predictionList" class="prediction-list"></div>
+              <div id="incidentList" class="incident-list"></div>
+              <button class="text-link" type="button" data-open-collection="incidents" data-i18n="link.viewAllIncidents">View all incidents...</button>
+            </section>
+
             <section class="section memory-insights-section">
               <div class="section-title">
                 <h2 data-i18n="section.memoryInsights">Memory Insights</h2>
@@ -209,8 +219,8 @@ enum DashboardAssets {
                 <input id="configPort" name="dashboardPort" type="number" min="1024" max="65535">
               </label>
               <label>
-                <span data-i18n="settings.pollingInterval">Polling Interval</span>
-                <input id="configPoll" name="pollIntervalSeconds" type="number" min="0.25" max="30" step="0.25">
+                <span data-i18n="settings.pollingInterval">Safety Poll Interval</span>
+                <input id="configPoll" name="pollIntervalSeconds" type="number" min="5" max="30" step="1">
               </label>
               <label>
                 <span data-i18n="settings.maxFiles">Max Files / Directory</span>
@@ -651,16 +661,22 @@ enum DashboardAssets {
       background: rgba(18, 23, 29, 0.72);
     }
 
-    .left-rail { border-right: 1px solid var(--line); }
+    .left-rail {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      border-right: 1px solid var(--line);
+    }
     .right-rail {
       grid-auto-rows: unset;
-      grid-template-rows: minmax(0, 1.02fr) minmax(0, 0.98fr) minmax(0, 0.82fr);
-      overflow: hidden;
+      grid-template-rows: minmax(300px, 1.05fr) minmax(280px, 0.95fr) minmax(300px, 1fr) minmax(240px, 0.8fr);
+      overflow-y: auto;
+      overscroll-behavior: contain;
       border-left: 1px solid var(--line);
     }
 
     .right-rail:has(.alert-detail:not([hidden])) {
-      grid-template-rows: minmax(400px, 1.55fr) minmax(0, 0.75fr) minmax(0, 0.52fr);
+      grid-template-rows: minmax(440px, 1.3fr) minmax(280px, 0.9fr) minmax(300px, 1fr) minmax(240px, 0.8fr);
     }
 
     .right-rail .section {
@@ -701,6 +717,10 @@ enum DashboardAssets {
       grid-template-rows: 48px minmax(0, 1fr) auto;
     }
 
+    .diagnostics-section {
+      grid-template-rows: 48px auto minmax(0, 1fr) auto;
+    }
+
     .section {
       border-bottom: 1px solid var(--line);
       background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(0,0,0,0.04));
@@ -713,6 +733,12 @@ enum DashboardAssets {
       justify-content: flex-start;
       gap: 12px;
       padding: 0 22px;
+    }
+
+    .left-rail .section-title {
+      min-height: 38px;
+      gap: 8px;
+      padding: 0 15px;
     }
 
     .section-title h2, .pane-header h2 {
@@ -747,6 +773,13 @@ enum DashboardAssets {
       gap: 12px;
     }
 
+    .left-rail .health-list,
+    .left-rail .source-list,
+    .left-rail .resource-list {
+      padding: 0 15px 11px;
+      gap: 7px;
+    }
+
     .roon-health {
       margin: 0 22px 16px;
       padding: 12px;
@@ -754,6 +787,11 @@ enum DashboardAssets {
       border-radius: 6px;
       background: rgba(8, 12, 16, 0.58);
       cursor: pointer;
+    }
+
+    .left-rail .roon-health {
+      margin: 0 15px 10px;
+      padding: 9px 11px;
     }
 
     .roon-health:hover {
@@ -770,6 +808,11 @@ enum DashboardAssets {
       grid-template-columns: 46px minmax(0, 1fr);
       gap: 11px;
       align-items: center;
+    }
+
+    .left-rail .roon-health-top {
+      grid-template-columns: 40px minmax(0, 1fr);
+      gap: 9px;
     }
 
     .health-score-wrap {
@@ -793,6 +836,18 @@ enum DashboardAssets {
       color: var(--green);
       font-weight: 760;
       font-variant-numeric: tabular-nums;
+    }
+
+    .left-rail .health-score-wrap,
+    .left-rail .health-score {
+      width: 40px;
+      min-width: 40px;
+    }
+
+    .left-rail .health-score {
+      height: 40px;
+      flex-basis: 40px;
+      font-size: 13px;
     }
 
     .roon-health.degraded .health-score { color: var(--yellow); }
@@ -835,6 +890,11 @@ enum DashboardAssets {
       margin-top: 11px;
     }
 
+    .left-rail .health-signals {
+      gap: 4px;
+      margin-top: 7px;
+    }
+
     .health-trend {
       height: 22px;
       display: grid;
@@ -842,6 +902,11 @@ enum DashboardAssets {
       gap: 2px;
       align-items: end;
       margin-top: 10px;
+    }
+
+    .left-rail .health-trend {
+      height: 16px;
+      margin-top: 7px;
     }
 
     .health-trend span {
@@ -863,6 +928,10 @@ enum DashboardAssets {
       color: #cbd3dc;
       font-size: 12px;
       line-height: 1.35;
+    }
+
+    .left-rail .health-signal {
+      line-height: 1.25;
     }
 
     .health-signal::before {
@@ -887,6 +956,12 @@ enum DashboardAssets {
 
     .health-row {
       grid-template-columns: 22px minmax(0, 1fr) auto;
+    }
+
+    .left-rail .health-row,
+    .left-rail .source-row {
+      min-height: 20px;
+      gap: 8px;
     }
 
     .health-row.warning .status-icon { background: var(--yellow); }
@@ -973,6 +1048,10 @@ enum DashboardAssets {
       font-size: 12px;
     }
 
+    .left-rail .section-footer {
+      padding: 0 15px 11px;
+    }
+
     .small-button {
       height: 28px;
       padding: 0 12px;
@@ -983,9 +1062,19 @@ enum DashboardAssets {
       min-height: 360px;
     }
 
+    .left-rail .resources-section {
+      min-height: 0;
+    }
+
     .resource-row {
       grid-template-columns: minmax(0, 1fr) minmax(72px, max-content) minmax(44px, max-content);
       gap: 10px;
+    }
+
+    .left-rail .resource-row {
+      min-height: 0;
+      column-gap: 7px;
+      row-gap: 3px;
     }
 
     .resource-row .value-with-help {
@@ -999,6 +1088,11 @@ enum DashboardAssets {
       border-radius: 999px;
       background: #2a3036;
       margin-top: -4px;
+    }
+
+    .left-rail .bar-track {
+      height: 3px;
+      margin-top: 0;
     }
 
     .bar-fill {
@@ -1035,6 +1129,14 @@ enum DashboardAssets {
       border-top: 1px solid var(--line);
       color: var(--muted);
       font-size: 13px;
+    }
+
+    .left-rail .updated-row {
+      grid-template-columns: auto minmax(0, 1fr) 16px 16px;
+      align-items: center;
+      gap: 7px;
+      padding: 10px 15px 12px;
+      font-size: 12px;
     }
 
     .updated-row strong {
@@ -1705,7 +1807,7 @@ enum DashboardAssets {
       font-variant-numeric: tabular-nums;
     }
 
-    .alert-list, .playback-list, .memory-insight-list {
+    .alert-list, .playback-list, .memory-insight-list, .incident-list, .prediction-list {
       min-height: 0;
       display: grid;
       align-content: start;
@@ -1823,6 +1925,77 @@ enum DashboardAssets {
     .memory-insight-list {
       gap: 10px;
       padding: 10px 16px 12px;
+    }
+
+    .prediction-list,
+    .incident-list {
+      gap: 8px;
+      padding: 8px 16px 4px;
+      overflow: visible;
+    }
+
+    .incident-list {
+      padding-top: 4px;
+      padding-bottom: 10px;
+    }
+
+    .diagnostic-card {
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--level-info);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .diagnostic-card.warning { border-left-color: var(--level-warning); }
+    .diagnostic-card.critical { border-left-color: var(--level-critical); }
+    .diagnostic-card.resolved { border-left-color: var(--green); opacity: 0.82; }
+    .diagnostic-card.monitoring { border-left-color: #53a7ff; }
+
+    .diagnostic-card-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+    }
+
+    .diagnostic-card-head strong {
+      min-width: 0;
+      color: #e4ebf2;
+      font-size: 12px;
+      line-height: 1.25;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .diagnostic-state {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 760;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .diagnostic-card p {
+      color: #b5bec8;
+      font-size: 11px;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      overflow: hidden;
+    }
+
+    .diagnostic-meta {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 10px;
     }
 
     .memory-insight-card {
@@ -2819,6 +2992,8 @@ enum DashboardAssets {
       collectionKind: null,
       collectionQuery: "",
       collectionLevel: "all",
+      collectionData: {},
+      collectionLoading: false,
       sourcePromptShown: false
     };
 
@@ -2847,6 +3022,7 @@ enum DashboardAssets {
         "section.memoryResources": "Memory & Resources",
         "section.liveLogStream": "Live Log Stream",
         "section.alerts": "Alerts",
+        "section.diagnostics": "Diagnostics & Predictions",
         "section.memoryInsights": "Memory Insights",
         "section.playbackRaat": "Playback & RAAT Events",
         "label.updated": "Updated:",
@@ -2878,6 +3054,7 @@ enum DashboardAssets {
         "memoryTrend.noData": "Waiting for memory samples",
         "memoryTrend.samples": "samples",
         "link.viewAllAlerts": "View all alerts...",
+        "link.viewAllIncidents": "View all incidents...",
         "link.viewAllMemoryInsights": "View week of memory insights...",
         "link.viewAllEvents": "View all Playback & RAAT events...",
         "collection.search": "Search...",
@@ -2885,10 +3062,13 @@ enum DashboardAssets {
         "collection.showing": "Showing",
         "collection.of": "of",
         "collection.noRows": "No matching entries.",
+        "collection.loading": "Loading entries...",
         "collection.alertsTitle": "All alerts",
         "collection.alertsSummary": "Deduplicated warnings and critical entries from the current dashboard window.",
         "collection.memoryTitle": "Memory analysis of the week",
         "collection.memorySummary": "Detected Roon memory jumps from the last seven days with nearby log context.",
+        "collection.incidentsTitle": "Diagnostic incidents",
+        "collection.incidentsSummary": "Correlated Roon episodes with state, recovery and supporting log evidence.",
         "collection.eventsTitle": "Playback & RAAT events",
         "collection.eventsSummary": "Playback and RAAT events from the current dashboard snapshot.",
         "collection.source": "Source",
@@ -2911,6 +3091,9 @@ enum DashboardAssets {
         "memoryInsights.category.cache": "Cache / image work",
         "memoryInsights.category.playback": "Playback / RAAT",
         "memoryInsights.category.database": "Database activity",
+        "memoryInsights.category.extension": "Roon API synchronization",
+        "memoryInsights.category.maintenance": "Database maintenance",
+        "memoryInsights.category.remote": "Remote access activity",
         "memoryInsights.category.network": "Network/API activity",
         "memoryInsights.category.log": "Log warning",
         "memoryInsights.category.unknown": "Unknown context",
@@ -2918,7 +3101,7 @@ enum DashboardAssets {
         "settings.loadingPath": "Loading config path...",
         "settings.language": "Language",
         "settings.dashboardPort": "Dashboard Port",
-        "settings.pollingInterval": "Polling Interval",
+        "settings.pollingInterval": "Safety Poll Interval",
         "settings.maxFiles": "Max Files / Directory",
         "settings.recentLogs": "Recent Log Lines",
         "settings.historyLogs": "Retained History Lines",
@@ -3000,6 +3183,7 @@ enum DashboardAssets {
         "health.system.memory.high": "High Roon process memory",
         "health.system.memory.observed": "Roon process memory observed",
         "health.system.swap.ok": "System swap low",
+        "health.system.swap.inactive": "Allocated swap inactive",
         "health.system.swap.used": "System swap in use",
         "health.system.swap.critical": "System swap critical",
         "health.runtime.core": "Roon Core",
@@ -3065,7 +3249,19 @@ enum DashboardAssets {
         rssMemory: "RSS Memory",
         virtualMemory: "Virtual Memory",
         managedMemory: "Managed Memory",
-        unmanaged: "Unmanaged",
+        unmanaged: "Native Memory",
+        gcCommitted: "GC Committed",
+        gcPause: "GC Pause (window)",
+        "diagnostics.active": "active",
+        "diagnostics.monitoring": "monitoring",
+        "diagnostics.resolved": "resolved",
+        "diagnostics.none": "No diagnostic incidents",
+        "diagnostics.noPredictions": "No emerging problems detected",
+        "diagnostics.predictions": "predictions",
+        "diagnostics.incidents": "incidents",
+        "diagnostics.baseline": "learned baseline",
+        "diagnostics.confidence": "confidence",
+        "diagnostics.events": "events",
         systemSwap: "System Swap",
         cpuUsage: "CPU Usage",
         diskIO: "Roon Disk I/O",
@@ -3099,6 +3295,7 @@ enum DashboardAssets {
         "section.memoryResources": "Speicher & Ressourcen",
         "section.liveLogStream": "Live-Logstream",
         "section.alerts": "Warnungen",
+        "section.diagnostics": "Diagnose & Prognosen",
         "section.memoryInsights": "Speicheranalyse",
         "section.playbackRaat": "Playback & RAAT-Ereignisse",
         "label.updated": "Aktualisiert:",
@@ -3130,6 +3327,7 @@ enum DashboardAssets {
         "memoryTrend.noData": "Warte auf Speicherwerte",
         "memoryTrend.samples": "Proben",
         "link.viewAllAlerts": "Alle Warnungen anzeigen...",
+        "link.viewAllIncidents": "Alle Diagnosevorfälle anzeigen...",
         "link.viewAllMemoryInsights": "Speicheranalyse der Woche anzeigen...",
         "link.viewAllEvents": "Alle Playback & RAAT-Ereignisse anzeigen...",
         "collection.search": "Suchen...",
@@ -3137,10 +3335,13 @@ enum DashboardAssets {
         "collection.showing": "Zeige",
         "collection.of": "von",
         "collection.noRows": "Keine passenden Einträge.",
+        "collection.loading": "Einträge werden geladen...",
         "collection.alertsTitle": "Alle Warnungen",
         "collection.alertsSummary": "Deduplizierte Warnungen und kritische Einträge aus dem aktuellen Dashboard-Fenster.",
         "collection.memoryTitle": "Speicheranalyse der Woche",
         "collection.memorySummary": "Erkannte Roon-Speichersprünge der letzten sieben Tage mit nahen Loghinweisen.",
+        "collection.incidentsTitle": "Diagnosevorfälle",
+        "collection.incidentsSummary": "Korrelierte Roon-Episoden mit Zustand, Erholung und zugehörigen Logbelegen.",
         "collection.eventsTitle": "Playback & RAAT-Ereignisse",
         "collection.eventsSummary": "Playback- und RAAT-Ereignisse aus dem aktuellen Dashboard-Snapshot.",
         "collection.source": "Quelle",
@@ -3163,6 +3364,9 @@ enum DashboardAssets {
         "memoryInsights.category.cache": "Cache / Bildverarbeitung",
         "memoryInsights.category.playback": "Playback / RAAT",
         "memoryInsights.category.database": "Datenbankaktivität",
+        "memoryInsights.category.extension": "Roon-API-Synchronisation",
+        "memoryInsights.category.maintenance": "Datenbankwartung",
+        "memoryInsights.category.remote": "Remote-Access-Aktivität",
         "memoryInsights.category.network": "Netzwerk/API-Aktivität",
         "memoryInsights.category.log": "Log-Warnung",
         "memoryInsights.category.unknown": "Unklarer Kontext",
@@ -3170,7 +3374,7 @@ enum DashboardAssets {
         "settings.loadingPath": "Config-Pfad wird geladen...",
         "settings.language": "Sprache",
         "settings.dashboardPort": "Dashboard-Port",
-        "settings.pollingInterval": "Polling-Intervall",
+        "settings.pollingInterval": "Sicherheits-Polling",
         "settings.maxFiles": "Max. Dateien / Ordner",
         "settings.recentLogs": "Letzte Logzeilen",
         "settings.historyLogs": "Behaltene Historienzeilen",
@@ -3252,6 +3456,7 @@ enum DashboardAssets {
         "health.system.memory.high": "Hoher Roon-Prozessspeicher",
         "health.system.memory.observed": "Roon-Prozessspeicher beobachtet",
         "health.system.swap.ok": "System-Swap niedrig",
+        "health.system.swap.inactive": "Belegter Swap inaktiv",
         "health.system.swap.used": "System nutzt Swap",
         "health.system.swap.critical": "System-Swap kritisch",
         "health.runtime.core": "Roon Core",
@@ -3317,7 +3522,19 @@ enum DashboardAssets {
         rssMemory: "RSS-Speicher",
         virtualMemory: "Virtueller Speicher",
         managedMemory: "Managed Speicher",
-        unmanaged: "Unmanaged",
+        unmanaged: "Native Speicher",
+        gcCommitted: "GC reserviert",
+        gcPause: "GC-Pause (Fenster)",
+        "diagnostics.active": "aktiv",
+        "diagnostics.monitoring": "Beobachtung",
+        "diagnostics.resolved": "behoben",
+        "diagnostics.none": "Keine Diagnosevorfälle",
+        "diagnostics.noPredictions": "Keine aufkommenden Probleme erkannt",
+        "diagnostics.predictions": "Prognosen",
+        "diagnostics.incidents": "Vorfälle",
+        "diagnostics.baseline": "gelernter Normalwert",
+        "diagnostics.confidence": "Sicherheit",
+        "diagnostics.events": "Ereignisse",
         systemSwap: "System-Swap",
         cpuUsage: "CPU-Auslastung",
         diskIO: "Roon Disk-I/O",
@@ -3346,6 +3563,7 @@ enum DashboardAssets {
         "section.memoryResources": "Resource indicators derived from parsed Roon log metrics and local process sampling where available.",
         "section.liveLogStream": "The newest matching log lines. Filtering and pausing affect the visible stream, not the background watcher.",
         "section.alerts": "Deduplicated warnings and critical events extracted from logs. Counts are for the current in-memory dashboard window.",
+        "section.diagnostics": "Correlated incidents, explicit recovery states, learned local baselines and explainable trend predictions.",
         "section.memoryInsights": "Detected Roon memory jumps from the last seven days, correlated with nearby log activity. This is a time-based clue, not a proven root cause.",
         "section.playbackRaat": "Playback and RAAT-related events inferred from log patterns, such as buffering, zone changes and RAAT reconnects.",
         "health.card": "Click the health card for details. The score starts at 100 and is reduced by active warning signals such as stale logs, RAAT instability, database issues, high memory or low disk space.",
@@ -3363,7 +3581,9 @@ enum DashboardAssets {
         "resource.virtual": "Virtual memory reported by Roon metrics. This can be much larger than physical memory and is mainly useful for trend changes.",
         "resource.managed": "Managed runtime memory reported by Roon logs, usually related to .NET/Mono managed allocations.",
         "resource.unmanaged": "Native or unmanaged memory reported by Roon logs. Growth here can indicate native buffers or cache pressure.",
-        "resource.swap": "macOS swap currently in use. This is the strongest memory-pressure signal in the health score.",
+        "resource.gcCommitted": "Memory committed to Roon's managed runtime. The difference to Managed-live describes reserved heap headroom, not necessarily a leak.",
+        "resource.gcPause": "Percentage of the latest Roon statistics window spent in garbage collection. Sustained growth can explain CPU or playback pressure.",
+        "resource.swap": "macOS swap currently allocated. Health is reduced only while new swap-outs show active memory pressure.",
         "resource.cpu": "Current Roon-related process CPU percentage from macOS sampling. It is intentionally sampled slowly to reduce background overhead.",
         "resource.diskIO": "Read plus write throughput for detected Roon processes, sampled from macOS process resource counters. The first sample may show -- until a rate can be calculated.",
         "resource.openFiles": "Open file descriptors for detected Roon processes. macOS may hide this value for other apps; unavailable samples are shown as --.",
@@ -3386,7 +3606,7 @@ enum DashboardAssets {
         "chart.legend.error": "Buckets containing critical or error-level log lines.",
         "settings.language": "Switches dashboard labels and help text between German and English.",
         "settings.dashboardPort": "Local HTTP port for the dashboard. Valid ports are 1024 to 65535; a restart may be needed after changing it.",
-        "settings.pollingInterval": "How often known log files are checked for appended lines. Lower values feel more live but wake the app more often.",
+        "settings.pollingInterval": "Fallback check for known log files. File-system events deliver normal updates immediately; the safety poll recovers missed events.",
         "settings.maxFiles": "Maximum number of newest matching current files per log directory. Keeping this moderate limits discovery work.",
         "settings.recentLogs": "Maximum number of recent rows sent to the live stream snapshot. Higher values make each dashboard refresh larger.",
         "settings.historyLogs": "Maximum number of log rows retained server-side for export, diagnosis and chart aggregation. These rows are not sent with every refresh.",
@@ -3435,6 +3655,7 @@ enum DashboardAssets {
         "section.memoryResources": "Ressourcenwerte aus geparsten Roon-Logmetriken und lokalen Prozessproben, soweit verfügbar.",
         "section.liveLogStream": "Die neuesten passenden Logzeilen. Filter und Pause betreffen nur die Anzeige, nicht den Hintergrund-Watcher.",
         "section.alerts": "Deduplizierte Warnungen und kritische Ereignisse aus den Logs. Die Zähler beziehen sich auf das aktuelle In-Memory-Fenster.",
+        "section.diagnostics": "Korrelierte Vorfälle, explizite Erholung, gelernte lokale Normalwerte und nachvollziehbare Trendprognosen.",
         "section.memoryInsights": "Erkannte Roon-Speichersprünge der letzten sieben Tage, zeitlich mit nahen Logaktivitäten korreliert. Das ist ein Hinweis, keine bewiesene Ursache.",
         "section.playbackRaat": "Playback- und RAAT-Ereignisse aus Logmustern, zum Beispiel Buffering, Zonenwechsel und RAAT-Reconnects.",
         "health.card": "Klicke die Health-Karte für Details. Der Score startet bei 100 und sinkt durch aktive Warnsignale wie veraltete Logs, RAAT-Probleme, Datenbankhinweise, hohen Speicher oder knappen Speicherplatz.",
@@ -3452,7 +3673,9 @@ enum DashboardAssets {
         "resource.virtual": "Virtueller Speicher aus Roon-Metriken. Kann deutlich größer sein als physischer Speicher und ist vor allem für Trends hilfreich.",
         "resource.managed": "Managed Runtime Memory aus Roon-Logs, typischerweise .NET/Mono-verwaltete Allokationen.",
         "resource.unmanaged": "Nativer oder unmanaged Speicher aus Roon-Logs. Wachstum kann auf native Puffer oder Cache-Druck hinweisen.",
-        "resource.swap": "Aktuell von macOS genutzter Swap. Das ist das stärkste Speicherdruck-Signal für den Health-Score.",
+        "resource.gcCommitted": "Für Roon reservierter Managed-Heap. Die Differenz zu Managed-live ist freier Heap-Spielraum und nicht automatisch ein Leak.",
+        "resource.gcPause": "Anteil des letzten Roon-Statistikfensters, der für Garbage Collection benötigt wurde. Dauerhaftes Wachstum kann CPU- oder Playback-Druck erklären.",
+        "resource.swap": "Aktuell von macOS belegter Swap. Der Health-Score sinkt nur, wenn neue Swap-outs aktiven Speicherdruck zeigen.",
         "resource.cpu": "Aktuelle CPU-Prozentwerte erkannter Roon-Prozesse aus macOS-Proben. Wird bewusst langsam abgefragt, um Ressourcen zu sparen.",
         "resource.diskIO": "Gelesener plus geschriebener Durchsatz erkannter Roon-Prozesse aus macOS-Prozesszählern. Die erste Probe kann -- zeigen, bis eine Rate berechnet werden kann.",
         "resource.openFiles": "Offene Dateideskriptoren erkannter Roon-Prozesse. macOS kann diesen Wert für andere Apps verbergen; nicht verfügbare Proben erscheinen als --.",
@@ -3475,7 +3698,7 @@ enum DashboardAssets {
         "chart.legend.error": "Buckets mit kritischen oder Fehler-Logzeilen.",
         "settings.language": "Schaltet Dashboard-Beschriftungen und Hilfetexte zwischen Deutsch und Englisch um.",
         "settings.dashboardPort": "Lokaler HTTP-Port für das Dashboard. Gültig sind 1024 bis 65535; nach Änderung kann ein Neustart nötig sein.",
-        "settings.pollingInterval": "Wie oft bekannte Logdateien auf neue Zeilen geprüft werden. Niedrigere Werte wirken direkter, wecken die App aber häufiger.",
+        "settings.pollingInterval": "Fallback-Prüfung bekannter Logdateien. Dateisystemereignisse liefern normale Updates sofort; das Sicherheits-Polling fängt verpasste Ereignisse ab.",
         "settings.maxFiles": "Maximale Anzahl neuester passender aktueller Dateien pro Logordner. Moderate Werte begrenzen die Discovery-Arbeit.",
         "settings.recentLogs": "Maximale Anzahl jüngster Zeilen im Live-Stream-Snapshot. Höhere Werte machen jede Dashboard-Aktualisierung größer.",
         "settings.historyLogs": "Maximale Anzahl serverseitig behaltener Logzeilen für Export, Diagnose und Chart-Aggregation. Diese Zeilen werden nicht bei jeder Aktualisierung gesendet.",
@@ -3632,6 +3855,7 @@ enum DashboardAssets {
       ['[data-i18n="section.sources"]', "section.sources"],
       ['[data-i18n="section.memoryResources"]', "section.memoryResources"],
       ['[data-i18n="section.alerts"]', "section.alerts"],
+      ['[data-i18n="section.diagnostics"]', "section.diagnostics"],
       ['[data-i18n="section.memoryInsights"]', "section.memoryInsights"],
       ['[data-i18n="section.playbackRaat"]', "section.playbackRaat"],
       ["#pauseStream", "logs.pause"],
@@ -3959,9 +4183,9 @@ enum DashboardAssets {
       setText("uptime", uptime(snapshot.runStartedAt));
       setText("sinceLabel", `${t("since")} ${fmtTime(snapshot.runStartedAt)}`);
       setText("updatedAt", fmtTime(snapshot.generatedAt));
-      setText("allAlertCount", alerts.length);
-      setText("warningAlertCount", alerts.filter(item => item.severity === "warning").length);
-      setText("errorAlertCount", alerts.filter(item => item.severity === "critical").length);
+      setText("allAlertCount", snapshot.alertTotalCount ?? alerts.length);
+      setText("warningAlertCount", snapshot.warningAlertTotalCount ?? alerts.filter(item => item.severity === "warning").length);
+      setText("errorAlertCount", snapshot.criticalAlertTotalCount ?? alerts.filter(item => item.severity === "critical").length);
 
       renderRuntime(snapshot);
       renderSources(snapshot);
@@ -3969,13 +4193,13 @@ enum DashboardAssets {
       renderMemoryTrend(snapshot);
       const visibleLogCount = renderLogs(logs);
       renderAlerts(alerts);
-      renderMemoryInsights(snapshot.memoryInsights || []);
+      renderDiagnostics(snapshot.diagnostics || {});
+      renderMemoryInsights(snapshot.memoryInsights || [], snapshot.memoryInsightTotalCount);
       renderPlayback(playback);
       renderChart(chartData);
       updateStreamStatus(logs.length, visibleLogCount);
       renderSourcePanel(snapshot);
       renderHealthDetail(snapshot);
-      renderCollection(snapshot);
       maybeOpenSourcePrompt(snapshot);
     }
 
@@ -4029,7 +4253,7 @@ enum DashboardAssets {
         ...current,
         language: document.getElementById("configLanguage").value || "en",
         dashboardPort: Number(document.getElementById("configPort").value || 17666),
-        pollIntervalSeconds: Number(document.getElementById("configPoll").value || 0.75),
+        pollIntervalSeconds: Number(document.getElementById("configPoll").value || 5),
         maxFilesPerDirectory: Number(document.getElementById("configMaxFiles").value || 50),
         recentLogMaxLines: Number(document.getElementById("configRecentLogs").value || 500),
         logHistoryMaxLines: Number(document.getElementById("configHistoryLogs").value || 5000),
@@ -4199,7 +4423,6 @@ enum DashboardAssets {
       if (!response.ok) throw new Error(configDocument.message || "Source save failed");
       state.configDocument = configDocument;
       fillSettings(configDocument);
-      await fetch("/api/watch/reload", { method: "POST" }).catch(() => {});
       renderSourcePanel(state.lastSnapshot);
       dismissSourcePrompt();
       setText("sourceStatus", t("status.sourcesReloaded"));
@@ -4340,7 +4563,9 @@ enum DashboardAssets {
         [t("health.processes"), `${system.processes?.length || 0}`],
         [t("health.cpu"), `${Number(system.totalCPUPercent || 0).toFixed(1)}%`],
         [t("health.memory"), formatResource(system.totalMemoryMB || 0, "MB")],
-        [t("health.swap"), Number.isFinite(Number(system.swapUsedMB)) ? `${formatResource(system.swapUsedMB, "MB")} / ${formatResource(system.swapTotalMB || 0, "MB")}` : "--"],
+        [t("health.swap"), Number.isFinite(Number(system.swapUsedMB))
+          ? `${formatResource(system.swapUsedMB, "MB")} / ${formatResource(system.swapTotalMB || 0, "MB")}${Number.isFinite(Number(system.swapOutRateMBps)) ? ` · Out ${formatResource(system.swapOutRateMBps, "MB/s")}` : ""}`
+          : "--"],
         [t("health.diskIO"), diskIOLabel],
         [t("health.openFiles"), system.openFileCount ?? "--"],
         [t("health.diskFree"), system.logVolumeFreeMB ? `${formatResource(system.logVolumeFreeMB, "MB")} · ${system.logVolumePath || ""}` : "--"]
@@ -4413,10 +4638,22 @@ enum DashboardAssets {
       return String(value || "").replace(/\\/Users\\/[^/]+/g, "/Users/<user>");
     }
 
-    function exportIncidentBundle() {
+    function redactLogSecrets(value) {
+      return String(value || "")
+        .replace(/("token"\\s*:\\s*")[^"]+("?)/gi, "$1[redacted]$2")
+        .replace(/(authorization\\s*[:=]\\s*)[^\\s,]+/gi, "$1[redacted]");
+    }
+
+    async function exportIncidentBundle() {
       const snapshot = state.lastSnapshot || {};
       const config = state.configDocument?.config || {};
-      const logs = currentExportLogs().slice(0, 250);
+      const logs = currentExportLogs().slice(0, 250).map(item => ({ ...item, text: redactLogSecrets(redactPath(item.text)) }));
+      const [alerts, memoryInsights, playback, incidents] = await Promise.all([
+        loadCollection("alerts", true),
+        loadCollection("memory", true),
+        loadCollection("events", true),
+        loadCollection("incidents", true)
+      ]);
       const safeConfig = {
         ...config,
         baseDirectory: redactPath(config.baseDirectory),
@@ -4430,12 +4667,14 @@ enum DashboardAssets {
         system: snapshot.system,
         sources: snapshot.watchedSources || [],
         counters: snapshot.counters || {},
-        alerts: snapshot.alerts || [],
-        memoryInsights: snapshot.memoryInsights || [],
-        playback: snapshot.playback || [],
+        alerts,
+        memoryInsights,
+        playback,
+        diagnostics: { ...(snapshot.diagnostics || {}), incidents },
         logs,
         config: safeConfig
       };
+      ["alerts", "memory", "events", "incidents"].forEach(kind => delete state.collectionData[kind]);
       const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -4511,10 +4750,13 @@ enum DashboardAssets {
 
     function renderResources(snapshot) {
       const byMetric = Object.fromEntries((snapshot.memory || []).map(item => [item.metric, item]));
+      const telemetry = snapshot.diagnostics?.telemetry || {};
       const physical = byMetric["Physical Memory"]?.valueMB || 0;
       const virtual = byMetric["Virtual Memory"]?.valueMB || 0;
       const managed = byMetric["Managed Memory"]?.valueMB || 0;
-      const unmanaged = byMetric["Unmanaged Memory"]?.valueMB || 0;
+      const native = Number(telemetry.nativeMemoryMB ?? byMetric["Native Memory"]?.valueMB ?? byMetric["Unmanaged Memory"]?.valueMB ?? 0);
+      const gcCommitted = Number(telemetry.gcCommittedMB);
+      const gcPause = Number(telemetry.gcPauseWindowPercent);
       const system = snapshot.system || {};
       const cpu = Number(system.totalCPUPercent);
       const openFiles = Number(system.openFileCount);
@@ -4531,7 +4773,9 @@ enum DashboardAssets {
         { label: t("rssMemory"), value: physical, unit: "MB", percent: Math.min(92, physical / 16), helpKey: "resource.rss" },
         { label: t("virtualMemory"), value: virtual, unit: "MB", percent: Math.min(92, virtual / 24), helpKey: "resource.virtual" },
         { label: t("managedMemory"), value: managed, unit: "MB", percent: Math.min(92, managed / 12), helpKey: "resource.managed" },
-        { label: t("unmanaged"), value: unmanaged, unit: "MB", percent: Math.min(92, unmanaged / 14), helpKey: "resource.unmanaged" },
+        { label: t("gcCommitted"), value: Number.isFinite(gcCommitted) ? gcCommitted : null, unit: "MB", percent: Number.isFinite(gcCommitted) ? Math.min(92, gcCommitted / 16) : null, helpKey: "resource.gcCommitted" },
+        { label: t("unmanaged"), value: native, unit: "MB", percent: Math.min(92, Math.max(0, native) / 14), helpKey: "resource.unmanaged" },
+        { label: t("gcPause"), value: Number.isFinite(gcPause) ? gcPause : null, unit: "%", percent: Number.isFinite(gcPause) ? Math.min(100, gcPause * 5) : null, helpKey: "resource.gcPause" },
         { label: t("systemSwap"), value: hasSwap ? swapUsed : null, unit: "MB", percent: hasSwap ? Math.min(100, (Number.isFinite(swapRatio) ? swapRatio * 100 : swapUsed / 10.24)) : null, helpKey: "resource.swap" },
         { label: t("cpuUsage"), value: hasCPU ? cpu : null, unit: "%", percent: hasCPU ? Math.min(100, cpu) : null, helpKey: "resource.cpu" },
         { label: t("diskIO"), value: hasDiskIO ? diskIORate : null, unit: "MB/s", percent: hasDiskIO ? Math.min(100, diskIORate * 10) : null, helpKey: "resource.diskIO" },
@@ -4828,6 +5072,101 @@ enum DashboardAssets {
       }
     }
 
+    function diagnosticStateLabel(stateValue) {
+      const key = `diagnostics.${stateValue || "active"}`;
+      return t(key);
+    }
+
+    function diagnosticKindLabel(kind, fallback) {
+      const labels = state.language === "de" ? {
+        "database.maintenance": "Datenbankwartung",
+        "server.lifecycle": "Roon-Server-Neustart",
+        "server.exception": "Roon-Server-Ausnahme",
+        "raat.transport": "RAAT-Transportunterbrechung",
+        "playback.failure": "Playback-Unterbrechung",
+        "database.failure": "Datenbankfehler",
+        "extension.connection": "Roon-API-Verbindung",
+        "extension.sync": "Roon-API-Synchronisation",
+        "remote.access": "Remote Access",
+        "device.cast": "Cast-Geräteverbindung"
+      } : {};
+      return labels[kind] || fallback || kind || "Diagnostic incident";
+    }
+
+    function predictionTitle(item) {
+      if (state.language !== "de") return item.title || item.kind;
+      const labels = {
+        "memory.growth": "Roon-Speichergrundwert steigt",
+        "gc.pressure": "Zunehmender Garbage-Collection-Druck",
+        "cpu.sustained": "Roon-CPU-Last bleibt erhöht",
+        "files.growth": "Offene Dateien kehren nicht zum Normalwert zurück",
+        "disk.sustained": "Anhaltende Roon-Datenträgeraktivität",
+        "incident.recurring": "Wiederkehrender Diagnosevorfall"
+      };
+      return labels[item.kind] || item.title || item.kind;
+    }
+
+    function predictionMessage(item) {
+      if (state.language !== "de") return item.message || "";
+      const current = Number(item.currentValue);
+      const baseline = Number(item.baselineValue);
+      const change = Number(item.changePerHour);
+      if (item.kind === "memory.growth") return `Der physische Speicher steigt um etwa ${Math.round(change)} MB pro Stunde und kehrt nicht zum gelernten Normalwert zurück.`;
+      if (item.kind === "gc.pressure") return `Die jüngsten GC-Pausen belegen durchschnittlich ${Number.isFinite(current) ? current.toFixed(1) : "--"}% des Messfensters.`;
+      if (item.kind === "cpu.sustained") return `Die CPU-Auslastung bleibt über mehrere Messungen bei etwa ${Math.round(current)}% statt zum Normalwert zurückzukehren.`;
+      if (item.kind === "files.growth") return `Roon sammelt etwa ${Math.round(change)} zusätzliche Dateideskriptoren pro Stunde an.`;
+      if (item.kind === "disk.sustained") return `Die Datenträgeraktivität bleibt deutlich über dem gelernten Normalwert${Number.isFinite(baseline) ? ` von ${baseline.toFixed(2)} MB/s` : ""}.`;
+      return item.message || "";
+    }
+
+    function renderDiagnostics(diagnostics) {
+      const incidents = Array.isArray(diagnostics.incidents) ? diagnostics.incidents : [];
+      const predictions = Array.isArray(diagnostics.predictions) ? diagnostics.predictions : [];
+      const activeCount = Number(diagnostics.activeIncidentCount || incidents.filter(item => item.state !== "resolved").length);
+      const totalCount = Number(diagnostics.incidentTotalCount || incidents.length);
+      const baselineSamples = Number(diagnostics.baseline?.sampleCount || 0);
+      setText("diagnosticCount", `${activeCount}/${totalCount} · ${predictions.length} ${t("diagnostics.predictions")}`);
+
+      renderList("predictionList", predictions.slice(0, 2), item => {
+        const confidence = Math.round(Math.max(0, Math.min(1, Number(item.confidence || 0))) * 100);
+        return `
+          <article class="diagnostic-card ${escapeHTML(item.severity || "info")}">
+            <div class="diagnostic-card-head">
+              <strong>${escapeHTML(predictionTitle(item))}</strong>
+              <span class="diagnostic-state">${confidence}%</span>
+            </div>
+            <p>${escapeHTML(predictionMessage(item))}</p>
+            <div class="diagnostic-meta">
+              <span>${escapeHTML(t("diagnostics.confidence"))}: ${confidence}%</span>
+              ${Number.isFinite(Number(item.baselineValue)) ? `<span>${escapeHTML(t("diagnostics.baseline"))}: ${escapeHTML(formatDiagnosticValue(item.baselineValue, item.unit))}</span>` : ""}
+            </div>
+          </article>
+        `;
+      }, t("diagnostics.noPredictions"));
+
+      renderList("incidentList", incidents.slice(0, 4), item => `
+        <article class="diagnostic-card ${escapeHTML(item.severity || "info")} ${escapeHTML(item.state || "active")}">
+          <div class="diagnostic-card-head">
+            <strong>${escapeHTML(diagnosticKindLabel(item.kind, item.title))}</strong>
+            <span class="diagnostic-state">${escapeHTML(diagnosticStateLabel(item.state))}</span>
+          </div>
+          <p>${escapeHTML(item.state === "resolved" && item.recoveryMessage ? item.recoveryMessage : item.summary || "")}</p>
+          <div class="diagnostic-meta">
+            <span>${fmtTime(item.updatedAt)}</span>
+            <span>${Number(item.eventCount || 0)} ${escapeHTML(t("diagnostics.events"))}</span>
+            ${item.zone ? `<span>${escapeHTML(item.zone)}</span>` : ""}
+          </div>
+        </article>
+      `, baselineSamples > 0 ? `${t("diagnostics.none")} · ${baselineSamples} ${t("diagnostics.baseline")}` : t("diagnostics.none"));
+    }
+
+    function formatDiagnosticValue(value, unit) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "--";
+      if (["MB", "%", "MB/s"].includes(unit)) return formatResource(number, unit);
+      return `${new Intl.NumberFormat().format(Math.round(number))}${unit ? ` ${unit}` : ""}`;
+    }
+
     function memoryInsightCategoryLabel(category) {
       const key = `memoryInsights.category.${category || "unknown"}`;
       const translated = t(key);
@@ -4858,13 +5197,14 @@ enum DashboardAssets {
       return `<span class="memory-chip">${escapeHTML(label)} ${formatSignedResource(number, unit)}</span>`;
     }
 
-    function renderMemoryInsights(insights) {
+    function renderMemoryInsights(insights, totalCount) {
       const items = Array.isArray(insights) ? insights : [];
       const visibleIds = new Set(items.map(item => String(item.id || "")));
       state.openMemoryInsightIds.forEach(id => {
         if (!visibleIds.has(id)) state.openMemoryInsightIds.delete(id);
       });
-      setText("memoryInsightCount", `${items.length} · ${t("memoryInsights.lastSevenDays")}`);
+      const count = Number.isFinite(Number(totalCount)) ? Number(totalCount) : items.length;
+      setText("memoryInsightCount", `${count} · ${t("memoryInsights.lastSevenDays")}`);
       renderList("memoryInsightList", items, item => {
         const insightId = String(item.id || "");
         const direction = item.direction === "decrease" ? "decrease" : "increase";
@@ -4954,6 +5294,10 @@ enum DashboardAssets {
     }
 
     function collectionSearchText(kind, item) {
+      if (kind === "incidents") {
+        const evidence = (item.evidence || []).map(event => `${event.title || ""} ${event.message || ""} ${event.source || ""}`).join(" ");
+        return [item.title, item.summary, item.recoveryMessage, item.kind, item.state, item.severity, item.zone, item.source, evidence].join(" ").toLowerCase();
+      }
       if (kind === "memory") {
         const related = (item.relatedEvents || []).map(event => `${event.title || ""} ${event.message || ""} ${event.source || ""} ${event.category || ""}`).join(" ");
         return [
@@ -4978,10 +5322,27 @@ enum DashboardAssets {
 
     function collectionRows(kind, snapshot = state.lastSnapshot) {
       if (!snapshot) return [];
+      if (Array.isArray(state.collectionData[kind])) return state.collectionData[kind];
       if (kind === "alerts") return snapshot.alerts || [];
       if (kind === "memory") return snapshot.memoryInsights || [];
       if (kind === "events") return snapshot.playback || [];
+      if (kind === "incidents") return snapshot.diagnostics?.incidents || [];
       return [];
+    }
+
+    async function loadCollection(kind, force = false) {
+      if (!force && Array.isArray(state.collectionData[kind])) return state.collectionData[kind];
+      const endpoints = {
+        alerts: "/api/collection/alerts",
+        memory: "/api/collection/memory",
+        events: "/api/collection/playback",
+        incidents: "/api/collection/incidents"
+      };
+      const response = await fetch(endpoints[kind], { cache: "no-store" });
+      if (!response.ok) throw new Error(`Collection request failed: ${response.status}`);
+      const rows = await response.json();
+      state.collectionData[kind] = Array.isArray(rows) ? rows : [];
+      return state.collectionData[kind];
     }
 
     function collectionConfig(kind) {
@@ -4999,6 +5360,13 @@ enum DashboardAssets {
           empty: t("memoryInsights.noData")
         };
       }
+      if (kind === "incidents") {
+        return {
+          title: t("collection.incidentsTitle"),
+          summary: t("collection.incidentsSummary"),
+          empty: t("diagnostics.none")
+        };
+      }
       return {
         title: t("collection.eventsTitle"),
         summary: t("collection.eventsSummary"),
@@ -5006,21 +5374,33 @@ enum DashboardAssets {
       };
     }
 
-    function openCollection(kind) {
+    async function openCollection(kind) {
       state.collectionKind = kind;
       state.collectionQuery = "";
       state.collectionLevel = "all";
+      state.collectionLoading = true;
       const panel = document.getElementById("collectionPanel");
       if (panel) panel.hidden = false;
       setValue("collectionSearch", "");
       setValue("collectionLevelFilter", "all");
       renderCollection();
+      try {
+        await loadCollection(kind, true);
+      } finally {
+        state.collectionLoading = false;
+        renderCollection();
+      }
       document.getElementById("collectionSearch")?.focus({ preventScroll: true });
     }
 
     function closeCollection() {
       const panel = document.getElementById("collectionPanel");
       if (panel) panel.hidden = true;
+      if (state.collectionKind) delete state.collectionData[state.collectionKind];
+      state.collectionKind = null;
+      state.collectionQuery = "";
+      state.collectionLoading = false;
+      document.getElementById("collectionBody")?.replaceChildren();
     }
 
     function renderCollection(snapshot = state.lastSnapshot) {
@@ -5032,6 +5412,7 @@ enum DashboardAssets {
       const query = state.collectionQuery.trim().toLowerCase();
       const level = state.collectionLevel || "all";
       const isMemory = kind === "memory";
+      const isIncident = kind === "incidents";
       const levelFilter = document.getElementById("collectionLevelFilter");
       if (levelFilter) {
         levelFilter.hidden = isMemory;
@@ -5050,8 +5431,14 @@ enum DashboardAssets {
 
       const body = document.getElementById("collectionBody");
       if (!body) return;
+      if (state.collectionLoading) {
+        setText("collectionSummary", t("collection.loading"));
+        setText("collectionCount", "--");
+        body.innerHTML = `<div class="empty">${escapeHTML(t("collection.loading"))}</div>`;
+        return;
+      }
       body.innerHTML = filtered.length
-        ? filtered.map(item => isMemory ? renderCollectionMemoryRow(item) : renderCollectionEventRow(item)).join("")
+        ? filtered.map(item => isMemory ? renderCollectionMemoryRow(item) : isIncident ? renderCollectionIncidentRow(item) : renderCollectionEventRow(item)).join("")
         : `<div class="empty">${escapeHTML(query || level !== "all" ? t("collection.noRows") : config.empty)}</div>`;
     }
 
@@ -5071,6 +5458,42 @@ enum DashboardAssets {
             ${collectionPill(t("collection.zone"), item.zone)}
           </div>
           <pre class="collection-message">${escapeHTML(item.message || "")}</pre>
+        </article>
+      `;
+    }
+
+    function renderCollectionIncidentRow(item) {
+      const level = alertLevel(item);
+      const evidence = item.evidence || [];
+      const detailId = `incident-${String(item.id || "")}`;
+      const evidenceRows = evidence.map(event => `
+        <div class="memory-evidence-row">
+          <span>${fmtDateTime(event.time)}</span>
+          <span class="memory-chip">${escapeHTML(event.domain || "log")}</span>
+          <span>${escapeHTML(sourceName(event.source))}</span>
+          <p>${escapeHTML(event.message || event.title || "")}</p>
+        </div>
+      `).join("");
+      return `
+        <article class="collection-card-row ${escapeHTML(level)}">
+          <div class="collection-row-head">
+            <span class="level-badge level-${level}">${escapeHTML(diagnosticStateLabel(item.state))}</span>
+            <strong>${escapeHTML(diagnosticKindLabel(item.kind, item.title))}</strong>
+            <time>${fmtDateTime(item.updatedAt)}</time>
+          </div>
+          <p class="collection-summary">${escapeHTML(item.state === "resolved" && item.recoveryMessage ? item.recoveryMessage : item.summary || "")}</p>
+          <div class="collection-meta">
+            ${collectionPill(t("collection.type"), item.kind)}
+            ${collectionPill(t("collection.source"), sourceName(item.source))}
+            ${collectionPill(t("collection.zone"), item.zone)}
+            ${collectionPill(t("diagnostics.events"), item.eventCount)}
+          </div>
+          ${evidence.length ? `
+            <details class="collection-evidence" data-collection-detail-id="${escapeHTML(detailId)}" ${state.openCollectionDetailIds.has(detailId) ? "open" : ""}>
+              <summary>${evidence.length} ${escapeHTML(t("collection.related"))}</summary>
+              <div class="collection-evidence-list">${evidenceRows}</div>
+            </details>
+          ` : ""}
         </article>
       `;
     }
@@ -5204,10 +5627,35 @@ enum DashboardAssets {
       }).join("");
     }
 
+    function mergeLiveSnapshot(snapshot, previous) {
+      if (!previous || snapshot.runStartedAt !== previous.runStartedAt) return snapshot;
+      const seen = new Set();
+      const configuredLimit = Number(state.configDocument?.config?.recentLogMaxLines || 500);
+      const limit = Math.max(100, Math.min(10000, configuredLimit));
+      snapshot.recentLogs = [...(snapshot.recentLogs || []), ...(previous.recentLogs || [])]
+        .filter(item => {
+          const id = Number(item.id);
+          if (!Number.isFinite(id) || seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        })
+        .sort((left, right) => Number(right.id || 0) - Number(left.id || 0))
+        .slice(0, limit);
+      return snapshot;
+    }
+
     async function refresh() {
       try {
-        const response = await fetch("/api/snapshot", { cache: "no-store" });
-        const snapshot = await response.json();
+        const previous = state.lastSnapshot;
+        const latestLogID = Number(previous?.recentLogs?.[0]?.id || 0);
+        const requestURL = latestLogID > 0 ? `/api/snapshot?afterLogId=${latestLogID}` : "/api/snapshot";
+        let response = await fetch(requestURL, { cache: "no-store" });
+        let snapshot = await response.json();
+        if (previous && snapshot.runStartedAt !== previous.runStartedAt && latestLogID > 0) {
+          response = await fetch("/api/snapshot", { cache: "no-store" });
+          snapshot = await response.json();
+        }
+        snapshot = mergeLiveSnapshot(snapshot, previous);
         if (state.paused && state.lastSnapshot) {
           state.pendingSnapshot = snapshot;
           const newestNow = snapshot.recentLogs?.[0]?.id || 0;
@@ -5360,7 +5808,8 @@ enum DashboardAssets {
       const collectionButton = event.target?.closest?.("[data-open-collection]");
       if (collectionButton) {
         event.preventDefault();
-        openCollection(collectionButton.dataset.openCollection || "events");
+        openCollection(collectionButton.dataset.openCollection || "events")
+          .catch(error => setText("collectionSummary", error.message));
       }
       if (event.target?.id === "clearSearch") {
         state.query = "";
@@ -5390,7 +5839,7 @@ enum DashboardAssets {
         closeHealthDetails();
       }
       if (event.target?.id === "exportIncident") {
-        exportIncidentBundle();
+        exportIncidentBundle().catch(error => setText("healthDetailStatus", error.message));
       }
       if (event.target?.id === "closeSources") {
         closeSources();
@@ -5455,8 +5904,8 @@ enum DashboardAssets {
     let refreshTimer = null;
 
     function refreshDelay() {
-      if (document.hidden) return 8000;
-      return state.paused ? 3000 : 1500;
+      if (document.hidden) return 10000;
+      return state.paused ? 4000 : 2000;
     }
 
     function scheduleRefresh() {

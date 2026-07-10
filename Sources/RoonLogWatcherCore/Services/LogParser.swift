@@ -1,13 +1,56 @@
 import Foundation
 
 public struct LogParser {
-    public init() {}
+    private let nowProvider: () -> Date
+    private let timestampParser = RoonLogTimestampParser()
+    private let memoryPatterns: [(metric: String, regex: NSRegularExpression)]
+    private let currentStatsRegex: NSRegularExpression?
+    private let namedZoneRegex: NSRegularExpression?
+    private let playbackZoneRegex: NSRegularExpression?
+    private let raatEndpointRegex: NSRegularExpression?
+
+    public init(nowProvider: @escaping () -> Date = Date.init) {
+        self.nowProvider = nowProvider
+        self.memoryPatterns = [
+            ("Virtual Memory", #"(\d+(?:\.\d+)?)\s*(kb|kib|mb|mib|gb|gib)\s+Virtual\b"#),
+            ("Physical Memory", #"(\d+(?:\.\d+)?)\s*(kb|kib|mb|mib|gb|gib)\s+Physical\b"#),
+            ("Managed Memory", #"(\d+(?:\.\d+)?)\s*(kb|kib|mb|mib|gb|gib)\s+Managed\b"#),
+            ("Unmanaged Memory", #"(\d+(?:\.\d+)?)\s*(kb|kib|mb|mib|gb|gib)\s+(?:estimated\s+)?Unmanaged\b"#)
+        ].compactMap { metric, pattern in
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+                return nil
+            }
+            return (metric, regex)
+        }
+        self.currentStatsRegex = try? NSRegularExpression(
+            pattern: #"([+-]?\d+(?:[.,]\d+)?)\s*(?:mb|mib)\s+Virtual;\s*([+-]?\d+(?:[.,]\d+)?)\s*(?:mb|mib)\s+Physical\s*=\s*([+-]?\d+(?:[.,]\d+)?)\s*(?:mb|mib)\s+GC-committed\s*\(([+-]?\d+(?:[.,]\d+)?)\s*(?:mb|mib)\s+Managed-live\s*=\s*([+-]?\d+(?:[.,]\d+)?)%\s+of\s+committed\)\s*\+\s*([+-]?\d+(?:[.,]\d+)?)\s*(?:mb|mib)\s+Native;\s*([+-]?\d+(?:[.,]\d+)?)%\s+of\s+runtime\s+in\s+GC\s+pauses,\s*([+-]?\d+(?:[.,]\d+)?)ms\s+GC\s+pause\s+in\s+last\s+window\s*\(([+-]?\d+(?:[.,]\d+)?)%\s+of\s+window\)"#,
+            options: [.caseInsensitive]
+        )
+        self.namedZoneRegex = try? NSRegularExpression(
+            pattern: #"\[zone\s+([^\]]+)\]"#,
+            options: [.caseInsensitive]
+        )
+        self.playbackZoneRegex = try? NSRegularExpression(
+            pattern: #"\[([^\]]+)\]\s+\[(?:PLAYING|LOADING|STOPPED)\s+@"#,
+            options: [.caseInsensitive]
+        )
+        self.raatEndpointRegex = try? NSRegularExpression(
+            pattern: #"\[(?:raat|raat_ll/client)\]\s+\[([^\]]+)\]"#,
+            options: [.caseInsensitive]
+        )
+    }
 
     public func parse(file: String, line: String) -> [RuntimeEvent] {
         var events: [RuntimeEvent] = []
         let source = displaySourceName(file)
-        let time = extractTimestamp(from: line) ?? Date()
+        let now = nowProvider()
+        let time = timestampParser.parse(line, relativeTo: now) ?? now
         let lower = line.lowercased()
+
+        let operationalEvents = parseOperational(line: line, lower: lower, source: source, time: time)
+        if !operationalEvents.isEmpty {
+            return operationalEvents
+        }
 
         if isKnownInformationalRoonNoise(lower) {
             return [event(
@@ -21,7 +64,9 @@ public struct LogParser {
             )]
         }
 
-        events.append(contentsOf: parseMemory(line: line, source: source, time: time))
+        if Self.mayContainMemoryStats(lower) {
+            events.append(contentsOf: parseMemory(line: line, source: source, time: time))
+        }
         events.append(contentsOf: parsePlayback(line: line, lower: lower, source: source, time: time))
         events.append(contentsOf: parseRaat(line: line, lower: lower, source: source, time: time))
         events.append(contentsOf: parseRoonCache(line: line, lower: lower, source: source, time: time))
@@ -45,6 +90,19 @@ public struct LogParser {
     }
 
     private func parseMemory(line: String, source: String, time: Date) -> [RuntimeEvent] {
+        if let values = currentMemoryStats(from: line) {
+            return [
+                metricEvent(title: "Virtual Memory", value: values.virtualMB, unit: "MB", source: source, time: time, isMemory: true),
+                metricEvent(title: "Physical Memory", value: values.physicalMB, unit: "MB", source: source, time: time, isMemory: true),
+                metricEvent(title: "GC Committed Memory", value: values.gcCommittedMB, unit: "MB", source: source, time: time, isMemory: true),
+                metricEvent(title: "Managed Memory", value: values.managedLiveMB, unit: "MB", source: source, time: time, isMemory: true),
+                metricEvent(title: "Native Memory", value: values.nativeMB, unit: "MB", source: source, time: time, isMemory: true),
+                metricEvent(title: "Managed Utilization", value: values.managedUtilizationPercent, unit: "%", source: source, time: time),
+                metricEvent(title: "GC Pause Runtime", value: values.gcPauseRuntimePercent, unit: "%", source: source, time: time),
+                metricEvent(title: "GC Pause Window", value: values.gcPauseWindowMilliseconds, unit: "ms", source: source, time: time),
+                metricEvent(title: "GC Pause Window Percent", value: values.gcPauseWindowPercent, unit: "%", source: source, time: time)
+            ]
+        }
         let samples = memorySamples(from: line)
         return samples.map { sample in
             event(
@@ -58,6 +116,58 @@ public struct LogParser {
                 valueMB: sample.valueMB
             )
         }
+    }
+
+    private func parseOperational(line: String, lower: String, source: String, time: Date) -> [RuntimeEvent] {
+        if lower.contains("[broker/database/vacuum]") {
+            if lower.contains("validating database") || lower.contains("validating /") {
+                return [event(domain: "database", type: "database.maintenance.started", severity: .info, title: "Database maintenance started", message: trimmed(line), source: source, time: time)]
+            }
+            if lower.contains("finished validation") {
+                return [event(domain: "database", type: "database.maintenance.completed", severity: .info, title: "Database maintenance completed", message: trimmed(line), source: source, time: time)]
+            }
+        }
+
+        if lower.contains("[leveldb]") && lower.contains("re-opening") {
+            return [event(domain: "database", type: "database.recovered", severity: .info, title: "Database reopened", message: trimmed(line), source: source, time: time)]
+        }
+
+        if lower.contains("[roonapi]") || lower.contains("[roonapi/registry]") {
+            if lower.contains("connection timeout") {
+                return [event(domain: "extension", type: "extension.timeout", severity: .info, title: "Roon API client timeout", message: trimmed(line), source: source, time: time)]
+            }
+            if lower.contains("disconnected") {
+                return [event(domain: "extension", type: "extension.disconnected", severity: .info, title: "Roon API client disconnected", message: trimmed(line), source: source, time: time)]
+            }
+            if lower.contains("connected (websocket)") || lower.contains("continue registered") {
+                return [event(domain: "extension", type: "extension.connected", severity: .info, title: "Roon API client connected", message: trimmed(line), source: source, time: time)]
+            }
+            if line.utf8.count >= 4_096,
+               lower.contains("continue subscribed") || lower.contains("subscribe_queue") {
+                return [event(domain: "extension", type: "extension.sync", severity: .info, title: "Roon API state synchronization", message: trimmed(line), source: source, time: time, numericValue: Double(line.utf8.count), unit: "bytes")]
+            }
+        }
+
+        if lower.contains("[mobile]") && (lower.contains("error mapping port") || lower.contains("failed to create port mapping") || lower.contains("unexpectedupnpcontrolresponse")) {
+            return [event(domain: "remote", type: "remote.port_mapping.failed", severity: .info, title: "Remote access port mapping failed", message: trimmed(line), source: source, time: time)]
+        }
+        if lower.contains("[mobile]") && (lower.contains("port check success") || lower.contains("success: true")) {
+            return [event(domain: "remote", type: "remote.connectivity.ok", severity: .info, title: "Remote connectivity succeeded", message: trimmed(line), source: source, time: time)]
+        }
+
+        if lower.contains("[cast/client]") && lower.contains("unable to authenticate tls connection") {
+            return [event(domain: "device", type: "device.cast.authentication", severity: .info, title: "Cast TLS authentication retry", message: trimmed(line), source: source, time: time, zone: extractBracketedClient(from: line))]
+        }
+
+        if lower.contains("[mlradio]") && lower.contains("status=success")
+            || lower.contains("waveform load") && lower.contains("notfound")
+            || lower.contains("[backup]") && lower.contains("retrieving backup manifest for cleanup")
+            || lower.contains("[airplay]") && lower.contains("disconnected")
+        {
+            return [event(domain: "log", type: "log.notice", severity: .info, title: "Roon operational notice", message: trimmed(line), source: source, time: time)]
+        }
+
+        return []
     }
 
     private func parsePlayback(line: String, lower: String, source: String, time: Date) -> [RuntimeEvent] {
@@ -277,23 +387,56 @@ public struct LogParser {
     }
 
     private func memorySamples(from line: String) -> [(metric: String, valueMB: Double)] {
-        let patterns: [(String, String)] = [
-            ("Virtual Memory", #"(\d+(?:\.\d+)?)\s*(kb|kib|mb|mib|gb|gib)\s+Virtual\b"#),
-            ("Physical Memory", #"(\d+(?:\.\d+)?)\s*(kb|kib|mb|mib|gb|gib)\s+Physical\b"#),
-            ("Managed Memory", #"(\d+(?:\.\d+)?)\s*(kb|kib|mb|mib|gb|gib)\s+Managed\b"#),
-            ("Unmanaged Memory", #"(\d+(?:\.\d+)?)\s*(kb|kib|mb|mib|gb|gib)\s+(?:estimated\s+)?Unmanaged\b"#)
-        ]
         var samples: [(String, Double)] = []
-        for (metric, pattern) in patterns {
-            guard let match = firstMatch(pattern: pattern, in: line) else { continue }
+        for (metric, regex) in memoryPatterns {
+            guard let match = firstMatch(regex: regex, in: line) else { continue }
             guard let value = Double(match[1]) else { continue }
             samples.append((metric, toMB(value, unit: match[2])))
         }
         return samples
     }
 
-    private func firstMatch(pattern: String, in text: String) -> [String]? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+    private func currentMemoryStats(from line: String) -> CurrentMemoryStats? {
+        guard let match = firstMatch(regex: currentStatsRegex, in: line), match.count == 10 else { return nil }
+        let values = match.dropFirst().compactMap(Self.numericValue)
+        guard values.count == 9 else { return nil }
+        return CurrentMemoryStats(
+            virtualMB: values[0],
+            physicalMB: values[1],
+            gcCommittedMB: values[2],
+            managedLiveMB: values[3],
+            managedUtilizationPercent: values[4],
+            nativeMB: values[5],
+            gcPauseRuntimePercent: values[6],
+            gcPauseWindowMilliseconds: values[7],
+            gcPauseWindowPercent: values[8]
+        )
+    }
+
+    private func metricEvent(title: String, value: Double, unit: String, source: String, time: Date, isMemory: Bool = false) -> RuntimeEvent {
+        event(
+            domain: isMemory ? "memory" : "runtime",
+            type: isMemory ? "memory.sample.detected" : "runtime.metric.detected",
+            severity: .info,
+            title: title,
+            message: "\(title): \(value) \(unit)",
+            source: source,
+            time: time,
+            valueMB: isMemory ? value : nil,
+            numericValue: value,
+            unit: unit
+        )
+    }
+
+    private static func mayContainMemoryStats(_ lower: String) -> Bool {
+        lower.contains(" physical")
+            || lower.contains(" managed")
+            || lower.contains(" unmanaged")
+            || lower.contains(" virtual")
+    }
+
+    private func firstMatch(regex: NSRegularExpression?, in text: String) -> [String]? {
+        guard let regex else { return nil }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let match = regex.firstMatch(in: text, options: [], range: range) else { return nil }
         return (0..<match.numberOfRanges).compactMap { index in
@@ -303,26 +446,22 @@ public struct LogParser {
     }
 
     private func extractZone(from line: String) -> String? {
-        if let match = firstMatch(pattern: #"\[zone\s+([^\]]+)\]"#, in: line), match.count > 1 {
+        if let match = firstMatch(regex: namedZoneRegex, in: line), match.count > 1 {
             return match[1].trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        if let match = firstMatch(pattern: #"\[([^\]]+)\]\s+\[(?:PLAYING|LOADING|STOPPED)\s+@"#, in: line), match.count > 1 {
+        if let match = firstMatch(regex: playbackZoneRegex, in: line), match.count > 1 {
+            return match[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let match = firstMatch(regex: raatEndpointRegex, in: line), match.count > 1 {
             return match[1].trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return nil
     }
 
-    private func extractTimestamp(from line: String) -> Date? {
-        guard let match = firstMatch(pattern: #"(\d{2})/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})"#, in: line), match.count == 6 else {
-            return nil
-        }
-        var components = Calendar.current.dateComponents([.year], from: Date())
-        components.month = Int(match[1])
-        components.day = Int(match[2])
-        components.hour = Int(match[3])
-        components.minute = Int(match[4])
-        components.second = Int(match[5])
-        return Calendar.current.date(from: components)
+    private func extractBracketedClient(from line: String) -> String? {
+        let parts = line.split(separator: "[")
+        guard parts.count >= 3, let end = parts[2].firstIndex(of: "]") else { return nil }
+        return String(parts[2][..<end])
     }
 
     private func event(
@@ -334,7 +473,9 @@ public struct LogParser {
         source: String,
         time: Date,
         valueMB: Double? = nil,
-        zone: String? = nil
+        zone: String? = nil,
+        numericValue: Double? = nil,
+        unit: String? = nil
     ) -> RuntimeEvent {
         RuntimeEvent(
             id: UUID().uuidString,
@@ -346,7 +487,9 @@ public struct LogParser {
             message: message,
             source: source,
             valueMB: valueMB,
-            zone: zone
+            zone: zone,
+            numericValue: numericValue,
+            unit: unit
         )
     }
 
@@ -397,9 +540,16 @@ public struct LogParser {
 
     private func isFatalServerProblem(_ lower: String) -> Bool {
         containsAny(lower, [
-            "fatal",
-            "crash",
-            "panic",
+            "fatal:",
+            "fatal error",
+            "[fatal]",
+            "roonserver crash",
+            "server crash",
+            "process crash",
+            "crash report",
+            "crashed unexpectedly",
+            "panic:",
+            "panic occurred",
             "unhandled exception",
             "uncaught exception",
             "outofmemory",
@@ -459,6 +609,10 @@ public struct LogParser {
         }
     }
 
+    private static func numericValue(_ value: String) -> Double? {
+        Double(value.replacingOccurrences(of: ",", with: "."))
+    }
+
     private func displaySourceName(_ path: String) -> String {
         let url = URL(fileURLWithPath: path)
         let file = url.lastPathComponent.isEmpty ? "log" : url.lastPathComponent
@@ -468,4 +622,16 @@ public struct LogParser {
         }
         return "\(parent)/\(file)"
     }
+}
+
+private struct CurrentMemoryStats {
+    var virtualMB: Double
+    var physicalMB: Double
+    var gcCommittedMB: Double
+    var managedLiveMB: Double
+    var managedUtilizationPercent: Double
+    var nativeMB: Double
+    var gcPauseRuntimePercent: Double
+    var gcPauseWindowMilliseconds: Double
+    var gcPauseWindowPercent: Double
 }

@@ -2,6 +2,7 @@ import AppKit
 import RoonLogWatcherCore
 import UserNotifications
 
+@MainActor
 final class StatusBarController {
     private let store: RuntimeStore
     private let server: DashboardServer
@@ -45,9 +46,13 @@ final class StatusBarController {
         refreshMenu()
         startWatching()
         openDashboard()
-        statusTimer = Timer.scheduledTimer(withTimeInterval: menuRefreshInterval, repeats: true) { [weak self] _ in
-            self?.refreshMenu()
-        }
+        statusTimer = Timer.scheduledTimer(
+            timeInterval: menuRefreshInterval,
+            target: self,
+            selector: #selector(refreshTimerFired),
+            userInfo: nil,
+            repeats: true
+        )
     }
 
     func stop() {
@@ -55,10 +60,13 @@ final class StatusBarController {
         tailer.stop()
         demoFeed.stop()
         server.stop()
+        store.flushPersistence()
     }
 
     func reloadConfigAndRestartWatching() {
         configStore.reload()
+        store.updateConfiguration(configStore.configuration)
+        requestNotificationPermissionIfNeeded()
         stopWatching()
         startWatching()
     }
@@ -205,6 +213,10 @@ final class StatusBarController {
         menu.addItem(NSMenuItem(title: menuText(en: "Quit", de: "Beenden"), action: #selector(quitAction), keyEquivalent: "q", target: self))
 
         statusItem.menu = menu
+    }
+
+    @objc private func refreshTimerFired() {
+        refreshMenu()
     }
 
     @discardableResult

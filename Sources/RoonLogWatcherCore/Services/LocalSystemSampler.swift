@@ -4,13 +4,18 @@ import Foundation
 public final class LocalSystemSampler {
     private let fileManager: FileManager
     private let processNames: Set<String>
-    private let processListingProvider: () -> String
+    private let processListingProvider: (() -> String)?
     private let openFileCountProvider: (Int) -> Int?
     private let diskIOProvider: (Int) -> (readBytes: UInt64, writeBytes: UInt64)?
     private let swapUsageProvider: () -> (totalMB: Double, usedMB: Double, freeMB: Double)?
+    private let swapActivityProvider: () -> (pageSize: UInt64, swapIns: UInt64, swapOuts: UInt64)?
     private let nowProvider: () -> Date
     private var previousDiskCounters: [Int: (readBytes: UInt64, writeBytes: UInt64)] = [:]
     private var previousDiskSampleAt: Date?
+    private var previousSwapCounters: (swapIns: UInt64, swapOuts: UInt64)?
+    private var previousSwapSampleAt: Date?
+    private var previousProcessCPUNanoseconds: [Int: UInt64] = [:]
+    private var previousProcessSampleAt: Date?
 
     public init(
         fileManager: FileManager = .default,
@@ -19,13 +24,12 @@ public final class LocalSystemSampler {
         openFileCountProvider: ((Int) -> Int?)? = nil,
         diskIOProvider: ((Int) -> (readBytes: UInt64, writeBytes: UInt64)?)? = nil,
         swapUsageProvider: (() -> (totalMB: Double, usedMB: Double, freeMB: Double)?)? = nil,
+        swapActivityProvider: (() -> (pageSize: UInt64, swapIns: UInt64, swapOuts: UInt64)?)? = nil,
         nowProvider: (() -> Date)? = nil
     ) {
         self.fileManager = fileManager
         self.processNames = processNames
-        self.processListingProvider = processListingProvider ?? {
-            Self.roonProcessListing(processNames: processNames)
-        }
+        self.processListingProvider = processListingProvider
         self.openFileCountProvider = openFileCountProvider ?? { pid in
             Self.openFileCount(pid: pid)
         }
@@ -33,6 +37,7 @@ public final class LocalSystemSampler {
             Self.diskIOCounters(pid: pid)
         }
         self.swapUsageProvider = swapUsageProvider ?? Self.swapUsage
+        self.swapActivityProvider = swapActivityProvider ?? Self.vmSwapCounters
         self.nowProvider = nowProvider ?? Date.init
     }
 
@@ -46,6 +51,7 @@ public final class LocalSystemSampler {
         let writeRateSamples = processes.compactMap(\.diskWriteRateMBps)
         let swap = swapUsageProvider()
         let swapRatio = swap.flatMap { $0.totalMB > 0 ? $0.usedMB / $0.totalMB : nil }
+        let swapRates = swapActivityRates(now: now)
 
         return LocalSystemStatus(
             sampledAt: now,
@@ -61,6 +67,8 @@ public final class LocalSystemSampler {
             swapUsedMB: swap?.usedMB,
             swapFreeMB: swap?.freeMB,
             swapUsedRatio: swapRatio,
+            swapInRateMBps: swapRates?.inRateMBps,
+            swapOutRateMBps: swapRates?.outRateMBps,
             logVolumePath: disk?.path,
             logVolumeFreeMB: disk?.freeMB,
             logVolumeFreeRatio: disk?.freeRatio
@@ -93,6 +101,10 @@ public final class LocalSystemSampler {
     }
 
     private func roonProcesses(includeOpenFiles: Bool, includeDiskIO: Bool, now: Date) -> [RoonProcessStatus] {
+        guard let processListingProvider else {
+            return directRoonProcesses(includeOpenFiles: includeOpenFiles, includeDiskIO: includeDiskIO, now: now)
+        }
+
         let output = processListingProvider()
         let previousCounters = previousDiskCounters
         let previousSampleAt = previousDiskSampleAt
@@ -124,6 +136,62 @@ public final class LocalSystemSampler {
             previousDiskSampleAt = now
         }
 
+        return processes
+    }
+
+    private func directRoonProcesses(includeOpenFiles: Bool, includeDiskIO: Bool, now: Date) -> [RoonProcessStatus] {
+        let previousDisk = previousDiskCounters
+        let previousCPU = previousProcessCPUNanoseconds
+        let diskElapsed = previousDiskSampleAt.map { now.timeIntervalSince($0) } ?? 0
+        let cpuElapsed = previousProcessSampleAt.map { now.timeIntervalSince($0) } ?? 0
+        var currentDisk: [Int: (readBytes: UInt64, writeBytes: UInt64)] = [:]
+        var currentCPU: [Int: UInt64] = [:]
+
+        let processes = Self.allProcessIDs().compactMap { pid -> RoonProcessStatus? in
+            guard let path = Self.processPath(pid: pid) else { return nil }
+            let name = URL(fileURLWithPath: path).lastPathComponent
+            guard processNames.contains(name), let counters = Self.processResourceCounters(pid: pid) else { return nil }
+
+            let processID = Int(pid)
+            let cpuNanoseconds = counters.userNanoseconds &+ counters.systemNanoseconds
+            currentCPU[processID] = cpuNanoseconds
+            if includeDiskIO {
+                currentDisk[processID] = (counters.readBytes, counters.writeBytes)
+            }
+
+            let cpuPercent: Double
+            if cpuElapsed > 0, let previous = previousCPU[processID], cpuNanoseconds >= previous {
+                cpuPercent = Double(cpuNanoseconds - previous) / (cpuElapsed * 1_000_000_000) * 100
+            } else {
+                cpuPercent = 0
+            }
+
+            var process = RoonProcessStatus(
+                pid: processID,
+                name: name,
+                path: path,
+                cpuPercent: cpuPercent,
+                memoryMB: Double(counters.residentBytes) / 1_048_576,
+                openFiles: includeOpenFiles ? openFileCountProvider(processID) : nil,
+                diskReadBytes: includeDiskIO ? counters.readBytes : nil,
+                diskWriteBytes: includeDiskIO ? counters.writeBytes : nil
+            )
+            if includeDiskIO, diskElapsed > 0, let previous = previousDisk[processID] {
+                process.diskReadRateMBps = Self.rateMBps(current: counters.readBytes, previous: previous.readBytes, elapsed: diskElapsed)
+                process.diskWriteRateMBps = Self.rateMBps(current: counters.writeBytes, previous: previous.writeBytes, elapsed: diskElapsed)
+            }
+            return process
+        }.sorted {
+            if $0.name == $1.name { return $0.pid < $1.pid }
+            return $0.name < $1.name
+        }
+
+        previousProcessCPUNanoseconds = currentCPU
+        previousProcessSampleAt = now
+        if includeDiskIO {
+            previousDiskCounters = currentDisk
+            previousDiskSampleAt = now
+        }
         return processes
     }
 
@@ -215,53 +283,90 @@ public final class LocalSystemSampler {
         return Double(current - previous) / elapsed / 1_048_576
     }
 
-    private static func roonProcessListing(processNames: Set<String>) -> String {
-        let pattern = processNames.sorted().joined(separator: "|")
-        let pidOutput = run("/usr/bin/pgrep", arguments: ["-x", pattern], timeout: 2)
-        let pids = pidOutput
-            .split(whereSeparator: { $0 == "\n" || $0 == " " || $0 == "\t" })
-            .compactMap { Int($0) }
-            .map(String.init)
+    private static func allProcessIDs() -> [pid_t] {
+        let estimatedCount = max(1, Int(proc_listallpids(nil, 0)))
+        var processIDs = [pid_t](repeating: 0, count: estimatedCount + 64)
+        let returnedCount = processIDs.withUnsafeMutableBytes { buffer in
+            proc_listallpids(buffer.baseAddress, Int32(buffer.count))
+        }
+        guard returnedCount > 0 else { return [] }
+        return Array(processIDs.prefix(Int(returnedCount))).filter { $0 > 0 }
+    }
 
-        guard !pids.isEmpty else { return "" }
-        return run(
-            "/bin/ps",
-            arguments: ["-p", pids.joined(separator: ","), "-o", "pid=,pcpu=,rss=,command="],
-            timeout: 2
+    private static func processPath(pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4_096)
+        let length = buffer.withUnsafeMutableBufferPointer { pointer in
+            proc_pidpath(pid, pointer.baseAddress, UInt32(pointer.count))
+        }
+        guard length > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    private static func processResourceCounters(pid: pid_t) -> ProcessResourceCounters? {
+        var info = rusage_info_v4()
+        let result = withUnsafeMutablePointer(to: &info) { pointer -> Int32 in
+            pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
+                proc_pid_rusage(pid, RUSAGE_INFO_V4, rebound)
+            }
+        }
+        guard result == 0 else { return nil }
+        return ProcessResourceCounters(
+            residentBytes: info.ri_resident_size,
+            userNanoseconds: info.ri_user_time,
+            systemNanoseconds: info.ri_system_time,
+            readBytes: info.ri_diskio_bytesread,
+            writeBytes: info.ri_diskio_byteswritten
         )
     }
 
     private static func swapUsage() -> (totalMB: Double, usedMB: Double, freeMB: Double)? {
-        let output = run("/usr/sbin/sysctl", arguments: ["vm.swapusage"], timeout: 2)
-        guard let match = firstMatch(
-            pattern: #"total\s*=\s*([0-9.]+)([KMG])\s+used\s*=\s*([0-9.]+)([KMG])\s+free\s*=\s*([0-9.]+)([KMG])"#,
-            in: output
-        ) else { return nil }
-
+        var usage = xsw_usage()
+        var size = MemoryLayout<xsw_usage>.size
+        guard sysctlbyname("vm.swapusage", &usage, &size, nil, 0) == 0 else { return nil }
         return (
-            totalMB: valueInMB(match[1], unit: match[2]),
-            usedMB: valueInMB(match[3], unit: match[4]),
-            freeMB: valueInMB(match[5], unit: match[6])
+            totalMB: Double(usage.xsu_total) / 1_048_576,
+            usedMB: Double(usage.xsu_used) / 1_048_576,
+            freeMB: Double(usage.xsu_avail) / 1_048_576
         )
     }
 
-    private static func firstMatch(pattern: String, in text: String) -> [String]? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
-        return (0..<match.numberOfRanges).compactMap { index in
-            guard let swiftRange = Range(match.range(at: index), in: text) else { return nil }
-            return String(text[swiftRange])
+    private func swapActivityRates(now: Date) -> (inRateMBps: Double, outRateMBps: Double)? {
+        guard let current = swapActivityProvider() else { return nil }
+        defer {
+            previousSwapCounters = (current.swapIns, current.swapOuts)
+            previousSwapSampleAt = now
         }
+        guard let previous = previousSwapCounters,
+              let previousAt = previousSwapSampleAt,
+              current.swapIns >= previous.swapIns,
+              current.swapOuts >= previous.swapOuts
+        else { return nil }
+
+        let elapsed = now.timeIntervalSince(previousAt)
+        guard elapsed > 0 else { return nil }
+        let pageSize = Double(current.pageSize)
+        return (
+            inRateMBps: Double(current.swapIns - previous.swapIns) * pageSize / elapsed / 1_048_576,
+            outRateMBps: Double(current.swapOuts - previous.swapOuts) * pageSize / elapsed / 1_048_576
+        )
     }
 
-    private static func valueInMB(_ value: String, unit: String) -> Double {
-        let numeric = Double(value) ?? 0
-        switch unit.lowercased() {
-        case "k": return numeric / 1024
-        case "g": return numeric * 1024
-        default: return numeric
+    private static func vmSwapCounters() -> (pageSize: UInt64, swapIns: UInt64, swapOuts: UInt64)? {
+        var statistics = vm_statistics64()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &statistics) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, rebound, &count)
+            }
         }
+        guard result == KERN_SUCCESS else { return nil }
+        return (
+            pageSize: UInt64(vm_kernel_page_size),
+            swapIns: UInt64(statistics.swapins),
+            swapOuts: UInt64(statistics.swapouts)
+        )
     }
 
     private func diskStatus(discoverer: RoonLogDiscoverer) -> (path: String, freeMB: Double, freeRatio: Double)? {
@@ -312,4 +417,12 @@ public final class LocalSystemSampler {
             return ""
         }
     }
+}
+
+private struct ProcessResourceCounters {
+    var residentBytes: UInt64
+    var userNanoseconds: UInt64
+    var systemNanoseconds: UInt64
+    var readBytes: UInt64
+    var writeBytes: UInt64
 }
