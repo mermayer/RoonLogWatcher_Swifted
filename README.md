@@ -30,6 +30,10 @@ feed. Direct Roon Server API access is not required.
 
 ![Roon Health details](docs/screenshots/readme/health-details.png)
 
+### 24-hour Diagnostic Indicators
+
+![Roon diagnostic indicators](docs/screenshots/readme/diagnostic-indicators.png)
+
 ## Dashboard Workflow
 
 The dashboard is designed for both local use on the Roon Mac and remote use from
@@ -42,8 +46,9 @@ operational lists close to the live stream:
 - **Memory Insights** lists detected Roon memory jumps from the last seven days
   and keeps related log context available below each insight.
 - **Diagnostics & Predictions** groups related Roon messages into operational
-  incidents, shows active, monitoring and recovered states, and reports trends
-  that differ meaningfully from the learned local baseline.
+  incidents, shows active, monitoring and recovered states, and reports compact
+  24-hour load, latency, backlog, backup and storage indicators against learned
+  seven-day baselines.
 - **Playback & RAAT Events** is scoped to playback and RAAT activity only. Its
   full view does not include unrelated system, memory or generic highlighted log
   timeline entries.
@@ -53,6 +58,7 @@ The sidebar footer actions open structured dashboard panels instead of raw JSON:
 | Action | Opens | Useful controls |
 | --- | --- | --- |
 | View all alerts | Full alert list | Search, severity filter, full message text |
+| View all diagnostic indicators | Current 24-hour indicator set | Search, severity filter, current/baseline values, totals and maxima |
 | View all diagnostic incidents | Seven-day incident history | Search, severity filter, state, recovery and correlated evidence |
 | View week of memory insights | Seven-day memory insight list | Search, deltas, confidence, related log lines |
 | View all Playback & RAAT events | Full playback/RAAT event list | Search, severity filter, source/type/zone chips |
@@ -91,7 +97,20 @@ The watcher combines log-derived events with local system signals:
 - Server lifecycle and failure indicators: startup, shutdown, fatal, crash,
   panic, unhandled exception, out-of-memory and segmentation fault.
 - Database signals: corruption, malformed SQLite image, locked database,
-  SQLite busy, slow query, timeout, rollback and maintenance completion.
+  SQLite busy, slow query, timeout, rollback, flush/mutation latency and
+  maintenance completion.
+- Roon backup lifecycle: preparation, transferred bytes, finalization, success,
+  failure, cleanup, duration and time since the last successful backup.
+- Metadata and library activity: full-refresh lifecycle, pending adds/removes,
+  processing queue, device-database updates and reported library size.
+- Streaming and network-service quality: TIDAL library sync, authentication
+  retries and recovery, HTTP status/latency, downloader throughput and repeated
+  delivery-delay notices.
+- Watched-storage activity: requested rescans, scan duration, unavailable
+  locations and later recovery.
+- Roon API activity per client: connection lifecycle, initial state sync,
+  update volume and transferred payload size. Changing ephemeral client ports
+  are normalized to one endpoint.
 - Operational episodes: database maintenance, server lifecycle, RAAT transport,
   playback failure, extension/API connectivity and sync, remote access and cast
   authentication. Related lines are correlated by time and endpoint instead of
@@ -148,14 +167,40 @@ This lets the current Health state recover without deleting the historical
 explanation.
 
 The app learns adaptive local baselines for Roon physical/process memory, CPU,
-open files, disk throughput and GC pause activity. Compact five-minute samples
-and baseline state are persisted, so learning continues across app restarts
-without retaining raw logs. The current predictions cover:
+open files, disk throughput and GC pause activity. It also stores five-minute
+aggregate buckets for operational values such as API traffic, service latency,
+streaming throughput, metadata backlog, database latency, storage scans and
+library size. These compact values and baseline state are retained for seven
+days, so learning continues across app restarts without retaining raw logs.
+
+The 24-hour diagnostic indicators use conservative default thresholds:
+
+| Indicator | Warning condition |
+| --- | --- |
+| Extension/API load | at least 20 MB or 2,000 updates within one hour |
+| Service requests | at least 3 HTTP 5xx responses in one hour, 2 s average or 10 s maximum latency |
+| Streaming throughput | average below 1,500 kbps across at least 3 transfers |
+| Streaming delivery | at least 3 repeated downloader-delay notices |
+| Metadata backlog | more than 1,000 items or 25% above the learned baseline |
+| Database flush | at least 5 samples averaging 100 ms or more |
+| Library mutation | at least 5 samples averaging 500 ms or more |
+| Storage scan | latest scan over 30 s or twice the learned baseline |
+| Backup freshness | no successful Roon backup for 8 days |
+
+Known backup, metadata-refresh, storage-scan, streaming-sync and database
+maintenance episodes provide context. Elevated memory, database and disk values
+during these workloads remain visible but are weighted more conservatively.
+Roon Remote port-test failures are tracked as remote-only information and do not
+penalize local playback health.
+
+The current predictions cover:
 
 - physical memory that keeps rising without returning to baseline;
 - sustained GC pause pressure or CPU load;
 - open-file growth and sustained disk activity;
 - recurring endpoint-specific incidents within 24 hours.
+- unusual API load, service/streaming degradation, metadata backlog, database
+  latency, long storage scans and an overdue backup.
 
 Each prediction includes its confidence, observation window, current and baseline
 values, trend where applicable and the evidence used for the conclusion. A
@@ -200,12 +245,14 @@ Default signal weights:
 | Server | retryable or generic exception warnings | up to 18 |
 | Database | corruption or malformed SQLite database | up to 42 |
 | Database | locked/busy/slow/failed database activity | up to 24 |
-| RAAT | visible transport interruption burst warning / critical | 18 / 34 |
-| RAAT | latest state disconnected | 12 |
+| RAAT | disconnect during active playback for at least 10 s / 60 s | 12 / 22 |
+| Playback | startup or mid-playback buffering beyond its recovery window | 8 / 18 |
 | Playback | timeout/failure warning burst | up to 24 |
 | Playback | heavy repeated playback instability | up to 32 |
+| Services | authentication unavailable for at least 60 s | 8 |
+| Backup | active for at least 15 min without completion | 8 |
 | Diagnostics | active correlated incident | strongest domain impact only |
-| Predictions | explainable warning-level developing trend | up to 14 |
+| Predictions | explainable warning-level developing trend | 3-8 |
 | Memory | near threshold at 92% / over threshold without macOS pressure | 0 |
 | Memory | near threshold with swap pressure | 8 |
 | Memory | over threshold with swap pressure or high system share | 12 / 28 |
@@ -239,14 +286,16 @@ The parser first tries to classify a line into a known domain. Domain-specific
 classification wins over plain text severity:
 
 - `info`: memory samples, file-cache status, normal playback activity, RAAT
-  reconnect/connect events, plain buffering, database maintenance and image
+  connect/disconnect/reconnect observations, plain buffering, database
+  maintenance and image
   fetch retries that still have attempts left. Known operational messages such as
   successful ML Radio status, missing optional waveform data, completed backup
-  cleanup and routine AirPlay disconnects also remain informational.
-- `warning`: playback timeout, failed, dropped or network-error lines; RAAT
-  transport lost, device lost or disconnected lines; server stopped; retryable or
-  generic exceptions; SQLite busy, locked database, slow query, timeout, rollback
-  and exhausted image fetch retries.
+  cleanup, short authentication retries, non-fatal duplicate Roon API responses
+  and routine AirPlay disconnects also remain informational.
+- `warning`: playback timeout, failed, dropped or network-error lines; server
+  stopped; retryable or generic exceptions; unavailable storage; failed backup;
+  SQLite busy, locked database, slow query, timeout, rollback and exhausted image
+  fetch retries.
 - `critical`: fatal, crash, panic, unhandled/uncaught exception, out-of-memory,
   segmentation fault, database corruption and malformed SQLite database image.
 
@@ -257,12 +306,14 @@ explicit fatal errors, Roon/server crash markers and corruption become critical;
 lines remain informational. Ordinary metadata containing words such as `Crash`
 or `Panic` is not sufficient for a server-failure classification.
 
-The health evaluator then applies windowed thresholds. Plain buffering and normal
-RAAT reconnect activity stay informational. Playback timeout/failure warnings are
-warning-level by default and become critical only after a much larger repeated
-burst. RAAT transport interruptions use warning and critical disconnect counts.
-Database corruption is immediately critical, while SQLite busy/locked activity is
-warning-level and capped.
+The diagnostic engine then applies context and duration. Buffering is considered
+normal for up to five seconds at startup and up to three seconds during active
+playback; 15 seconds becomes critical. An idle RAAT disconnect remains
+informational. A disconnect during active playback becomes warning-level after
+10 seconds and critical after 60 seconds. Short account-authentication retry
+bursts remain informational and become warning-level only after one minute.
+Database corruption is immediately critical, while SQLite busy/locked activity
+is warning-level and capped.
 
 Critical server exceptions affect Health only inside the configured event window.
 They remain available in the alert history but no longer keep the current Health
@@ -271,6 +322,11 @@ state critical indefinitely.
 Playback status lines are parsed before generic server-error fallbacks. This
 prevents normal track metadata such as a song title containing `Crash` from being
 mistaken for a Roon server crash.
+
+Before log text enters dashboard history, alerts, diagnostic evidence or exports,
+the app masks common token/authorization fields, user/core/machine identifiers,
+email addresses and the current user's home-directory prefix. Raw Roon log files
+on disk are never modified.
 
 ## Configuration
 
@@ -314,7 +370,8 @@ The main health-rule defaults are:
 
 - log stale warning / critical: `180s` / `600s`
 - warning burst window/count: `15 min` / `5`
-- RAAT disconnect window, warning count, critical count: `15 min`, `2`, `5`
+- RAAT warning / critical duration during active playback: `10s` / `60s`;
+  idle disconnects remain informational
 - database window: `30 min`
 - playback window / critical base count: `15 min` / `5`
 - disk warning / critical free space: `10 GB` / `2 GB`
@@ -339,6 +396,28 @@ swift test
 ```
 
 ## Changelog
+
+### [v0.3.0](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.3.0) - Context-Aware Diagnostics and Operational Trends - 2026-07-16
+
+- Added 24-hour diagnostic indicators with searchable full views and persisted
+  seven-day aggregate baselines for API load, service latency, streaming
+  throughput, metadata backlog, database latency, storage scans and library size.
+- Added correlated backup, metadata-refresh, storage-scan, streaming-service sync
+  and authentication episodes with duration, transferred volume, recovery and
+  memory context.
+- Reworked RAAT and buffering health weighting around playback context and
+  interruption duration instead of raw disconnect counts.
+- Added backup freshness, operational trend predictions and maintenance-aware
+  suppression for expected resource activity.
+- Rejected impossible negative Native Memory calculations and display unavailable
+  optional resource values as `--` instead of synthetic zeroes.
+- Added central masking for sensitive log fields before storage, alerts,
+  diagnostic evidence and exports.
+- Removed obsolete count-based RAAT settings from the configuration UI and
+  config schema now that interruption duration and playback context drive health.
+- Updated all README screenshots from the current English dashboard and
+  anonymized visible user paths and IP addresses before publication.
+- Expanded regression coverage to 74 tests.
 
 ### [v0.2.0](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.2.0) - Diagnostics, Predictions and Runtime Efficiency - 2026-07-10
 

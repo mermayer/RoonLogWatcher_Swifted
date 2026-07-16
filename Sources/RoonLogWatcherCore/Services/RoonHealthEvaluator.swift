@@ -30,7 +30,6 @@ struct RoonHealthEvaluator {
         evaluateRecentEventVolume(now: now, events: events, into: &signals)
         evaluateServerState(now: now, events: events, rules: rules, into: &signals)
         evaluateDatabase(now: now, events: events, rules: rules, into: &signals)
-        evaluateRaat(now: now, events: events, rules: rules, into: &signals)
         evaluatePlayback(now: now, events: events, rules: rules, into: &signals)
         evaluateMemory(now: now, memory: memory, memoryHistory: memoryHistory, system: system, into: &signals)
         evaluateSystem(system, rules: rules, into: &signals)
@@ -72,7 +71,18 @@ struct RoonHealthEvaluator {
 
     private func applyDiagnosticContext(_ diagnostics: DiagnosticAnalysisSnapshot?, to signals: inout [RoonHealthSignal]) {
         guard let diagnostics else { return }
-        let contextualDomains: Set<String> = ["server", "database", "raat", "playback"]
+        let contextualDomains: Set<String> = [
+            "server",
+            "database",
+            "raat",
+            "playback",
+            "memory",
+            "storage",
+            "service",
+            "streaming",
+            "metadata",
+            "backup"
+        ]
         for index in signals.indices where signals[index].impact > 0 {
             guard contextualDomains.contains(signals[index].domain),
                   let observedAt = signals[index].observedAt
@@ -144,6 +154,10 @@ struct RoonHealthEvaluator {
             switch prediction.kind {
             case "memory.growth", "files.growth": impact = 8
             case "gc.pressure", "cpu.sustained", "disk.sustained": impact = 6
+            case "backup.overdue", "metadata.backlog": impact = 8
+            case "extension.load": impact = 3
+            case "service.latency", "streaming.throughput", "streaming.quality",
+                 "database.flush", "database.mutation", "storage.scan": impact = 5
             default: impact = 5
             }
             signals.append(signal(
@@ -444,39 +458,6 @@ struct RoonHealthEvaluator {
                 observedAt: warnings.map(\.time).max(),
                 count: warnings.count,
                 windowMinutes: rules.databaseWindowMinutes
-            ))
-        }
-    }
-
-    private func evaluateRaat(now: Date, events: [RuntimeEvent], rules: HealthRuleConfiguration, into signals: inout [RoonHealthSignal]) {
-        let recentRaat = recentEvents(now: now, events: events, minutes: rules.raatWindowMinutes).filter { $0.domain == "raat" }
-        let disconnects = recentRaat.filter { $0.type == "raat.disconnected" && $0.severity == .warning }
-
-        if disconnects.count >= rules.raatCriticalDisconnects {
-            signals.append(signal(
-                id: "raat.unstable",
-                domain: "raat",
-                severity: .critical,
-                title: "RAAT unstable",
-                message: "\(disconnects.count) disconnect event(s) in the configured window.",
-                impact: 34,
-                observedAt: disconnects.map(\.time).max(),
-                count: disconnects.count,
-                windowMinutes: rules.raatWindowMinutes,
-                zone: disconnects.last?.zone
-            ))
-        } else if disconnects.count >= rules.raatWarningDisconnects {
-            signals.append(signal(
-                id: "raat.unstable",
-                domain: "raat",
-                severity: .warning,
-                title: "RAAT transport interruptions",
-                message: "\(disconnects.count) visible RAAT transport warning(s) in the configured window.",
-                impact: 18,
-                observedAt: disconnects.map(\.time).max(),
-                count: disconnects.count,
-                windowMinutes: rules.raatWindowMinutes,
-                zone: disconnects.last?.zone
             ))
         }
     }

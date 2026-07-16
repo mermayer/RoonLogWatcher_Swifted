@@ -8,6 +8,17 @@ public struct LogParser {
     private let namedZoneRegex: NSRegularExpression?
     private let playbackZoneRegex: NSRegularExpression?
     private let raatEndpointRegex: NSRegularExpression?
+    private let raatDeviceRegex: NSRegularExpression?
+    private let roonAPIClientRegex: NSRegularExpression?
+    private let backupProgressRegex: NSRegularExpression?
+    private let metadataPendingRegex: NSRegularExpression?
+    private let metadataQueueRegex: NSRegularExpression?
+    private let easyHTTPRegex: NSRegularExpression?
+    private let streamingDownloadRegex: NSRegularExpression?
+    private let dbPerformanceRegex: NSRegularExpression?
+    private let libraryMutationRegex: NSRegularExpression?
+    private let storageScanRegex: NSRegularExpression?
+    private let libraryStatsRegex: NSRegularExpression?
 
     public init(nowProvider: @escaping () -> Date = Date.init) {
         self.nowProvider = nowProvider
@@ -36,6 +47,50 @@ public struct LogParser {
         )
         self.raatEndpointRegex = try? NSRegularExpression(
             pattern: #"\[(?:raat|raat_ll/client)\]\s+\[([^\]]+)\]"#,
+            options: [.caseInsensitive]
+        )
+        self.raatDeviceRegex = try? NSRegularExpression(
+            pattern: #"\[RAAT::([^\]]+)\]"#,
+            options: [.caseInsensitive]
+        )
+        self.roonAPIClientRegex = try? NSRegularExpression(
+            pattern: #"\[apiclient\s+([^\]]+)\]"#,
+            options: [.caseInsensitive]
+        )
+        self.backupProgressRegex = try? NSRegularExpression(
+            pattern: #"bytes transferred:\s*(\d+)/(\d+)\s*\((\d+)%\)"#,
+            options: [.caseInsensitive]
+        )
+        self.metadataPendingRegex = try? NSRegularExpression(
+            pattern: #"pending adds=(\d+),\s*pending removes=(\d+),\s*current q size=(\d+)"#,
+            options: [.caseInsensitive]
+        )
+        self.metadataQueueRegex = try? NSRegularExpression(
+            pattern: #"_SpinQueue:\s*q size=(\d+)"#,
+            options: [.caseInsensitive]
+        )
+        self.easyHTTPRegex = try? NSRegularExpression(
+            pattern: #"(?:GET|POST|PUT|DELETE|HEAD)\s+to\s+(https?://[^\s]+)\s+returned after\s+(\d+)\s*ms,\s*status code:\s*(\d+)"#,
+            options: [.caseInsensitive]
+        )
+        self.streamingDownloadRegex = try? NSRegularExpression(
+            pattern: #"download speed:\s*(\d+)kbps\s+response time:\s*(\d+)ms"#,
+            options: [.caseInsensitive]
+        )
+        self.dbPerformanceRegex = try? NSRegularExpression(
+            pattern: #"\[dbperf\].*\bin\s+(\d+)\s*ms"#,
+            options: [.caseInsensitive]
+        )
+        self.libraryMutationRegex = try? NSRegularExpression(
+            pattern: #"\[library\]\s+endmutation in\s+(\d+)\s*ms"#,
+            options: [.caseInsensitive]
+        )
+        self.storageScanRegex = try? NSRegularExpression(
+            pattern: #"initial scan of\s+(.+?)\s+took:\s*(\d+)\s*ms"#,
+            options: [.caseInsensitive]
+        )
+        self.libraryStatsRegex = try? NSRegularExpression(
+            pattern: #"\[library stats\].*\btracks:\s*(\d+)"#,
             options: [.caseInsensitive]
         )
     }
@@ -91,17 +146,37 @@ public struct LogParser {
 
     private func parseMemory(line: String, source: String, time: Date) -> [RuntimeEvent] {
         if let values = currentMemoryStats(from: line) {
-            return [
+            var events = [
                 metricEvent(title: "Virtual Memory", value: values.virtualMB, unit: "MB", source: source, time: time, isMemory: true),
                 metricEvent(title: "Physical Memory", value: values.physicalMB, unit: "MB", source: source, time: time, isMemory: true),
                 metricEvent(title: "GC Committed Memory", value: values.gcCommittedMB, unit: "MB", source: source, time: time, isMemory: true),
                 metricEvent(title: "Managed Memory", value: values.managedLiveMB, unit: "MB", source: source, time: time, isMemory: true),
-                metricEvent(title: "Native Memory", value: values.nativeMB, unit: "MB", source: source, time: time, isMemory: true),
                 metricEvent(title: "Managed Utilization", value: values.managedUtilizationPercent, unit: "%", source: source, time: time),
                 metricEvent(title: "GC Pause Runtime", value: values.gcPauseRuntimePercent, unit: "%", source: source, time: time),
                 metricEvent(title: "GC Pause Window", value: values.gcPauseWindowMilliseconds, unit: "ms", source: source, time: time),
                 metricEvent(title: "GC Pause Window Percent", value: values.gcPauseWindowPercent, unit: "%", source: source, time: time)
             ]
+            if values.nativeMB >= 0 {
+                events.insert(
+                    metricEvent(title: "Native Memory", value: values.nativeMB, unit: "MB", source: source, time: time, isMemory: true),
+                    at: 4
+                )
+            } else {
+                events.insert(
+                    event(
+                        domain: "memory",
+                        type: "memory.metric.unavailable",
+                        severity: .info,
+                        title: "Native Memory",
+                        message: "Native Memory is not meaningful because GC committed memory exceeds physical RSS.",
+                        source: source,
+                        time: time,
+                        unit: "MB"
+                    ),
+                    at: 4
+                )
+            }
+            return events
         }
         let samples = memorySamples(from: line)
         return samples.map { sample in
@@ -119,6 +194,32 @@ public struct LogParser {
     }
 
     private func parseOperational(line: String, lower: String, source: String, time: Date) -> [RuntimeEvent] {
+        if lower.contains("already sent a final response") {
+            return [event(
+                domain: "extension",
+                type: "extension.response_race",
+                severity: .info,
+                title: "Roon API response race",
+                message: trimmed(line),
+                source: source,
+                time: time,
+                zone: extractRoonAPIClient(from: line)
+            )]
+        }
+
+        if let backup = parseBackup(line: line, lower: lower, source: source, time: time) {
+            return [backup]
+        }
+        if let metadata = parseMetadataOrLibrary(line: line, lower: lower, source: source, time: time) {
+            return [metadata]
+        }
+        if let service = parseServiceHealth(line: line, lower: lower, source: source, time: time) {
+            return [service]
+        }
+        if let performance = parseOperationalPerformance(line: line, lower: lower, source: source, time: time) {
+            return [performance]
+        }
+
         if lower.contains("[broker/database/vacuum]") {
             if lower.contains("validating database") || lower.contains("validating /") {
                 return [event(domain: "database", type: "database.maintenance.started", severity: .info, title: "Database maintenance started", message: trimmed(line), source: source, time: time)]
@@ -133,18 +234,37 @@ public struct LogParser {
         }
 
         if lower.contains("[roonapi]") || lower.contains("[roonapi/registry]") {
+            let client = extractRoonAPIClient(from: line)
+            if lower.contains("[roonapi/registry]") && lower.contains("=> [") {
+                return [event(domain: "extension", type: "extension.identified", severity: .info, title: "Roon API client identified", message: trimmed(line), source: source, time: time, zone: client)]
+            }
             if lower.contains("connection timeout") {
-                return [event(domain: "extension", type: "extension.timeout", severity: .info, title: "Roon API client timeout", message: trimmed(line), source: source, time: time)]
+                return [event(domain: "extension", type: "extension.timeout", severity: .info, title: "Roon API client timeout", message: trimmed(line), source: source, time: time, zone: client)]
             }
             if lower.contains("disconnected") {
-                return [event(domain: "extension", type: "extension.disconnected", severity: .info, title: "Roon API client disconnected", message: trimmed(line), source: source, time: time)]
+                return [event(domain: "extension", type: "extension.disconnected", severity: .info, title: "Roon API client disconnected", message: trimmed(line), source: source, time: time, zone: client)]
             }
             if lower.contains("connected (websocket)") || lower.contains("continue registered") {
-                return [event(domain: "extension", type: "extension.connected", severity: .info, title: "Roon API client connected", message: trimmed(line), source: source, time: time)]
+                return [event(domain: "extension", type: "extension.connected", severity: .info, title: "Roon API client connected", message: trimmed(line), source: source, time: time, zone: client)]
             }
-            if line.utf8.count >= 4_096,
-               lower.contains("continue subscribed") || lower.contains("subscribe_queue") {
-                return [event(domain: "extension", type: "extension.sync", severity: .info, title: "Roon API state synchronization", message: trimmed(line), source: source, time: time, numericValue: Double(line.utf8.count), unit: "bytes")]
+            if lower.contains("continue subscribed")
+                || lower.contains("continue changed")
+                || lower.contains("subscribe_queue")
+            {
+                let isInitialSync = line.utf8.count >= 4_096
+                    && (lower.contains("continue subscribed") || lower.contains("subscribe_queue"))
+                return [event(
+                    domain: "extension",
+                    type: isInitialSync ? "extension.sync" : "extension.traffic",
+                    severity: .info,
+                    title: isInitialSync ? "Roon API state synchronization" : "Roon API traffic",
+                    message: trimmed(line),
+                    source: source,
+                    time: time,
+                    zone: client,
+                    numericValue: Double(line.utf8.count),
+                    unit: "bytes"
+                )]
             }
         }
 
@@ -161,7 +281,6 @@ public struct LogParser {
 
         if lower.contains("[mlradio]") && lower.contains("status=success")
             || lower.contains("waveform load") && lower.contains("notfound")
-            || lower.contains("[backup]") && lower.contains("retrieving backup manifest for cleanup")
             || lower.contains("[airplay]") && lower.contains("disconnected")
         {
             return [event(domain: "log", type: "log.notice", severity: .info, title: "Roon operational notice", message: trimmed(line), source: source, time: time)]
@@ -170,11 +289,138 @@ public struct LogParser {
         return []
     }
 
+    private func parseBackup(line: String, lower: String, source: String, time: Date) -> RuntimeEvent? {
+        guard lower.contains("[backup]") || lower.contains("[broker/backups]") else { return nil }
+        if lower.contains("preparing backup") {
+            return event(domain: "backup", type: "backup.started", severity: .info, title: "Roon backup started", message: trimmed(line), source: source, time: time)
+        }
+        if let match = firstMatch(regex: backupProgressRegex, in: line),
+           match.count == 4,
+           let transferred = Double(match[1]) {
+            return event(domain: "backup", type: "backup.progress", severity: .info, title: "Roon backup progress", message: trimmed(line), source: source, time: time, numericValue: transferred, unit: "bytes")
+        }
+        if lower.contains("writing backup manifest") {
+            return event(domain: "backup", type: "backup.finalizing", severity: .info, title: "Roon backup finalizing", message: trimmed(line), source: source, time: time)
+        }
+        if lower.contains("successful sync") || lower.contains("on done") {
+            return event(domain: "backup", type: "backup.completed", severity: .info, title: "Roon backup completed", message: trimmed(line), source: source, time: time)
+        }
+        if lower.contains("retrieving backup manifest for cleanup")
+            || lower.contains("excessive backups")
+            || lower.contains("unneeded files")
+        {
+            return event(domain: "backup", type: "backup.cleanup", severity: .info, title: "Roon backup retention cleanup", message: trimmed(line), source: source, time: time)
+        }
+        if containsAny(lower, ["failed", "unable", "error", "cancelled", "canceled"]) {
+            return event(domain: "backup", type: "backup.failed", severity: .warning, title: "Roon backup failed", message: trimmed(line), source: source, time: time)
+        }
+        return nil
+    }
+
+    private func parseMetadataOrLibrary(line: String, lower: String, source: String, time: Date) -> RuntimeEvent? {
+        if lower.contains("[updatemetadata]") {
+            if lower.contains("ready for full refresh") && !lower.contains("not ready") {
+                return event(domain: "metadata", type: "metadata.refresh.started", severity: .info, title: "Metadata full refresh started", message: trimmed(line), source: source, time: time)
+            }
+            if let match = firstMatch(regex: metadataPendingRegex, in: line),
+               match.count == 4,
+               let pendingAdds = Double(match[1]),
+               let pendingRemoves = Double(match[2]),
+               let queueSize = Double(match[3]) {
+                return event(
+                    domain: "metadata",
+                    type: "metadata.backlog",
+                    severity: .info,
+                    title: "Metadata backlog",
+                    message: trimmed(line),
+                    source: source,
+                    time: time,
+                    numericValue: pendingAdds + pendingRemoves + queueSize,
+                    unit: "items"
+                )
+            }
+            if let match = firstMatch(regex: metadataQueueRegex, in: line),
+               match.count == 2,
+               let queueSize = Double(match[1]) {
+                return event(domain: "metadata", type: queueSize == 0 ? "metadata.refresh.completed" : "metadata.refresh.progress", severity: .info, title: "Metadata refresh queue", message: trimmed(line), source: source, time: time, numericValue: queueSize, unit: "items")
+            }
+        }
+        if let match = firstMatch(regex: libraryStatsRegex, in: line),
+           match.count == 2,
+           let tracks = Double(match[1]) {
+            return event(domain: "library", type: "library.stats", severity: .info, title: "Library tracks", message: trimmed(line), source: source, time: time, numericValue: tracks, unit: "tracks")
+        }
+        if lower.contains("[devicemap]") && lower.contains("device map updated") {
+            return event(domain: "maintenance", type: "maintenance.device_database", severity: .info, title: "Device database updated", message: trimmed(line), source: source, time: time)
+        }
+        return nil
+    }
+
+    private func parseServiceHealth(line: String, lower: String, source: String, time: Date) -> RuntimeEvent? {
+        if lower.contains("ensureauthready failed") {
+            return event(domain: "service", type: "service.auth.failed", severity: .info, title: "Roon account authentication retry", message: trimmed(line), source: source, time: time, zone: "Roon account")
+        }
+        if lower.contains("accountstatus=loggedin") {
+            return event(domain: "service", type: "service.auth.recovered", severity: .info, title: "Roon account authenticated", message: trimmed(line), source: source, time: time, zone: "Roon account")
+        }
+        if let match = firstMatch(regex: easyHTTPRegex, in: line),
+           match.count == 4,
+           let latency = Double(match[2]) {
+            let provider = serviceProvider(for: match[1])
+            return event(domain: provider == "Roon Remote" ? "remote" : "service", type: "service.http", severity: .info, title: "\(provider) request", message: trimmed(line), source: source, time: time, zone: provider, numericValue: latency, unit: "ms")
+        }
+        if let match = firstMatch(regex: streamingDownloadRegex, in: line),
+           match.count == 3,
+           let speed = Double(match[1]) {
+            return event(domain: "streaming", type: "streaming.download", severity: .info, title: "Streaming download speed", message: trimmed(line), source: source, time: time, zone: "Streaming media", numericValue: speed, unit: "kbps")
+        }
+        if lower.contains("poor connection") || lower.contains("block downloader too much time locked") {
+            return event(domain: "streaming", type: "streaming.quality_warning", severity: .info, title: "Streaming delivery delay", message: trimmed(line), source: source, time: time, zone: "Streaming media")
+        }
+        if lower.contains("[tidal/storage]") && lower.contains("scan ") && lower.contains(": starting") {
+            return event(domain: "service", type: "service.sync.started", severity: .info, title: "TIDAL library sync started", message: trimmed(line), source: source, time: time, zone: "TIDAL")
+        }
+        if lower.contains("[tidal/storage]") && lower.contains("scan ") && lower.contains(": finished") {
+            return event(domain: "service", type: "service.sync.completed", severity: .info, title: "TIDAL library sync completed", message: trimmed(line), source: source, time: time, zone: "TIDAL")
+        }
+        return nil
+    }
+
+    private func parseOperationalPerformance(line: String, lower: String, source: String, time: Date) -> RuntimeEvent? {
+        if let match = firstMatch(regex: dbPerformanceRegex, in: line),
+           match.count == 2,
+           let milliseconds = Double(match[1]) {
+            return event(domain: "database", type: "database.latency", severity: .info, title: "Database flush latency", message: trimmed(line), source: source, time: time, numericValue: milliseconds, unit: "ms")
+        }
+        if let match = firstMatch(regex: libraryMutationRegex, in: line),
+           match.count == 2,
+           let milliseconds = Double(match[1]) {
+            return event(domain: "database", type: "database.mutation", severity: .info, title: "Library mutation latency", message: trimmed(line), source: source, time: time, numericValue: milliseconds, unit: "ms")
+        }
+        if lower.contains("[storage]") && lower.contains("force rescan requested for") {
+            return event(domain: "storage", type: "storage.scan.started", severity: .info, title: "Storage scan started", message: trimmed(line), source: source, time: time, zone: lastPathComponent(in: line))
+        }
+        if let match = firstMatch(regex: storageScanRegex, in: line),
+           match.count == 3,
+           let milliseconds = Double(match[2]) {
+            return event(domain: "storage", type: "storage.scan.completed", severity: .info, title: "Storage scan completed", message: trimmed(line), source: source, time: time, zone: URL(fileURLWithPath: match[1]).lastPathComponent, numericValue: milliseconds, unit: "ms")
+        }
+        if lower.contains("[storage]")
+            && containsAny(lower, ["unreachable", "not available", "directory not found", "no such file", "permission denied"])
+        {
+            return event(domain: "storage", type: "storage.unavailable", severity: .warning, title: "Storage location unavailable", message: trimmed(line), source: source, time: time, zone: lastPathComponent(in: line))
+        }
+        return nil
+    }
+
     private func parsePlayback(line: String, lower: String, source: String, time: Date) -> [RuntimeEvent] {
         guard lower.contains("playback")
             || lower.contains("[playing @")
             || lower.contains("[loading @")
             || lower.contains("[stopped @")
+            || lower.contains(#""status":"buffering""#)
+            || lower.contains(#""status":"playing""#)
+            || lower.contains(#""status":"stopped""#)
             || lower.contains("startstream")
             || lower.contains("onplayfeedback")
             || lower.contains("signalpath quality")
@@ -227,7 +473,10 @@ public struct LogParser {
         if lower.contains("[playing @") || lower.contains("onplayfeedback playing") {
             events.append(event(domain: "playback", type: "playback.playing", severity: .info, title: "Playback playing", message: trimmed(line), source: source, time: time, zone: zone))
         }
-        if lower.contains("[stopped @") || lower.contains("onplayfeedback stopped") {
+        if lower.contains(#""status":"playing""#) {
+            events.append(event(domain: "playback", type: "playback.playing", severity: .info, title: "Playback playing", message: trimmed(line), source: source, time: time, zone: zone))
+        }
+        if lower.contains("[stopped @") || lower.contains("onplayfeedback stopped") || lower.contains(#""status":"stopped""#) {
             events.append(event(domain: "playback", type: "playback.stopped", severity: .info, title: "Playback stopped", message: trimmed(line), source: source, time: time, zone: zone))
         }
 
@@ -243,7 +492,7 @@ public struct LogParser {
 
         let zone = extractZone(from: line)
         if lower.contains("transport lost") || lower.contains("device lost") || lower.contains("disconnected") {
-            return [event(domain: "raat", type: "raat.disconnected", severity: .warning, title: "RAAT transport interruption", message: trimmed(line), source: source, time: time, zone: zone)]
+            return [event(domain: "raat", type: "raat.disconnected", severity: .info, title: "RAAT transport interruption", message: trimmed(line), source: source, time: time, zone: zone)]
         }
         if lower.contains("connected") || lower.contains("reconnect") {
             return [event(domain: "raat", type: "raat.connected", severity: .info, title: "RAAT connected", message: trimmed(line), source: source, time: time, zone: zone)]
@@ -455,7 +704,39 @@ public struct LogParser {
         if let match = firstMatch(regex: raatEndpointRegex, in: line), match.count > 1 {
             return match[1].trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        if let match = firstMatch(regex: raatDeviceRegex, in: line), match.count > 1 {
+            return match[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         return nil
+    }
+
+    private func extractRoonAPIClient(from line: String) -> String? {
+        guard let match = firstMatch(regex: roonAPIClientRegex, in: line), match.count > 1 else {
+            return nil
+        }
+        return match[1].replacingOccurrences(
+            of: #":\d+$"#,
+            with: "",
+            options: .regularExpression
+        )
+    }
+
+    private func serviceProvider(for rawURL: String) -> String {
+        guard let host = URL(string: rawURL)?.host?.lowercased() else { return "Network service" }
+        if host.contains("tidal") { return "TIDAL" }
+        if host.contains("qobuz") { return "Qobuz" }
+        if host.contains("porttest.roonlabs.net") { return "Roon Remote" }
+        if host.contains("roonlabs.net") { return "Roon Labs" }
+        if host == "127.0.0.1" || host == "localhost" { return "Local Roon service" }
+        return host
+    }
+
+    private func lastPathComponent(in line: String) -> String? {
+        let tokens = line.split(whereSeparator: { $0.isWhitespace })
+        guard let path = tokens.last(where: { $0.contains("/") }) else { return nil }
+        let cleaned = String(path).trimmingCharacters(in: CharacterSet(charactersIn: "'\","))
+        let component = URL(fileURLWithPath: cleaned).lastPathComponent
+        return component.isEmpty ? nil : component
     }
 
     private func extractBracketedClient(from line: String) -> String? {

@@ -363,7 +363,7 @@ final class LogParserTests: XCTestCase {
             line: "06/23 16:03:45 Critical: while dispatching events: System.InvalidOperationException: Already sent a final response"
         )
 
-        XCTAssertTrue(events.contains { $0.domain == "server" && $0.type == "server.exception.notice" && $0.severity == .info })
+        XCTAssertTrue(events.contains { $0.domain == "extension" && $0.type == "extension.response_race" && $0.severity == .info })
         XCTAssertFalse(events.contains { $0.severity == .warning || $0.severity == .critical })
     }
 
@@ -383,6 +383,32 @@ final class LogParserTests: XCTestCase {
             let events = parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line)
             XCTAssertTrue(events.contains { $0.domain == "log" && $0.type == "log.notice" && $0.severity == .info }, line)
             XCTAssertFalse(events.contains { $0.severity == .warning || $0.severity == .critical }, line)
+        }
+    }
+
+    func testParsesOperationalAnalysisSignalsFromRoonLogs() {
+        let parser = LogParser()
+        let cases: [(String, String, Double?, String?)] = [
+            ("07/10 05:01:29 Trace: [backup] preparing backup...", "backup.started", nil, nil),
+            ("07/10 05:02:29 Trace: [backup] bytes transferred: 524288000/748131200 (70%)", "backup.progress", 524_288_000, "bytes"),
+            ("07/10 05:03:29 Trace: [backup] writing backup manifest", "backup.finalizing", nil, nil),
+            ("07/10 05:04:29 Trace: [backup] successful sync", "backup.completed", nil, nil),
+            ("07/10 05:05:29 Trace: [updatemetadata] Flush: pending adds=13993, pending removes=7, current q size=4", "metadata.backlog", 14_004, "items"),
+            ("07/10 05:06:29 Trace: [dbperf] flush leveldb in 245 ms", "database.latency", 245, "ms"),
+            ("07/10 05:07:29 Trace: [library] endmutation in 812ms", "database.mutation", 812, "ms"),
+            ("07/10 05:08:29 Trace: [library stats] tracks: 36000, albums: 1500", "library.stats", 36_000, "tracks"),
+            ("07/10 05:09:29 Trace: [storage] initial scan of /Volumes/Music took: 3329 ms", "storage.scan.completed", 3_329, "ms"),
+            ("07/10 05:10:29 Trace: [easyhttp] GET to https://api.tidal.com/v1/albums returned after 304 ms, status code: 200", "service.http", 304, "ms"),
+            ("07/10 05:11:29 Trace: download speed: 6835kbps response time: 74ms", "streaming.download", 6_835, "kbps")
+        ]
+
+        for (line, type, value, unit) in cases {
+            let parsed = parser.parse(file: "/tmp/RoonServer/Logs/RoonServer_log.txt", line: line).first
+            XCTAssertEqual(parsed?.type, type, line)
+            if let value {
+                XCTAssertEqual(parsed?.numericValue ?? -1, value, accuracy: 0.001, line)
+            }
+            XCTAssertEqual(parsed?.unit, unit, line)
         }
     }
 
@@ -523,7 +549,7 @@ final class LogParserTests: XCTestCase {
         XCTAssertFalse(snapshot.playback.contains { $0.type == "raat.disconnected" })
     }
 
-    func testRaatDisconnectBurstEscalatesHealth() {
+    func testIdleRaatDisconnectBurstDoesNotEscalateHealth() {
         let parser = LogParser()
         let store = RuntimeStore()
 
@@ -538,11 +564,9 @@ final class LogParserTests: XCTestCase {
         }
 
         let snapshot = store.snapshot()
-        let raatSignal = snapshot.health.signals.first { $0.id == "raat.unstable" }
-
-        XCTAssertEqual(raatSignal?.severity, .warning)
-        XCTAssertEqual(raatSignal?.count, 2)
-        XCTAssertEqual(snapshot.counters.warningCount, 2)
+        XCTAssertFalse(snapshot.health.signals.contains { $0.id == "raat.unstable" })
+        XCTAssertEqual(snapshot.counters.warningCount, 0)
+        XCTAssertEqual(snapshot.diagnostics.incidents.first { $0.kind == "raat.transport" }?.severity, .info)
     }
 
     func testRuntimeStoreRetainsMoreThanEightyAlerts() {
@@ -679,7 +703,7 @@ final class LogParserTests: XCTestCase {
 
     func testLocalSystemSamplerDetectsRoonProcessesFromCommandListing() {
         let listing = """
-        44252 0.6 72800 /Users/joemac/Documents/Codex_Projects/RoonLogWatcher/dist/RoonLogWatcher.app/Contents/MacOS/RoonLogWatcher
+        44252 0.6 72800 /Users/tester/Applications/RoonLogWatcher.app/Contents/MacOS/RoonLogWatcher
         49889 0.0 56912 /Applications/Roon.app/Contents/MacOS/RAATServer
         49890 0.1 94256 /Applications/Roon.app/Contents/Resources/../RoonServer.app/Contents/MacOS/RoonServer
         49898 1.4 2153360 /Applications/Roon.app/Contents/RoonServer.app/Contents/RoonAppliance.app/Contents/MacOS/RoonAppliance

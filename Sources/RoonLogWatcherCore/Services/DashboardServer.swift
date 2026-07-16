@@ -135,7 +135,13 @@ public final class DashboardServer: @unchecked Sendable {
             return .text(DashboardAssets.javascript, contentType: "application/javascript; charset=utf-8")
         case "/api/snapshot", "/data":
             let afterLogID = parsed.query["afterLogId"].flatMap(Int.init)
-            return .json(snapshotJSON(afterLogID: afterLogID))
+            let volumeWindowMinutes = parsed.query["volumeWindow"].flatMap(Int.init)
+            let volumeOffset = parsed.query["volumeOffset"].flatMap(Int.init) ?? 0
+            return .json(snapshotJSON(
+                afterLogID: afterLogID,
+                volumeWindowMinutes: volumeWindowMinutes,
+                volumeOffset: volumeOffset
+            ))
         case "/api/collection/alerts":
             return .json(encodedJSON(store.alertCollection()))
         case "/api/collection/memory":
@@ -144,6 +150,8 @@ public final class DashboardServer: @unchecked Sendable {
             return .json(encodedJSON(store.playbackCollection()))
         case "/api/collection/incidents":
             return .json(encodedJSON(store.incidentCollection()))
+        case "/api/collection/metrics":
+            return .json(encodedJSON(store.diagnosticMetricCollection()))
         case "/api/config":
             if parsed.method == "POST" {
                 return saveConfigJSON(parsed.body)
@@ -167,8 +175,16 @@ public final class DashboardServer: @unchecked Sendable {
         }
     }
 
-    private func snapshotJSON(afterLogID: Int?) -> String {
-        encodedJSON(store.liveSnapshot(logsAfterID: afterLogID))
+    private func snapshotJSON(
+        afterLogID: Int?,
+        volumeWindowMinutes: Int?,
+        volumeOffset: Int
+    ) -> String {
+        encodedJSON(store.liveSnapshot(
+            logsAfterID: afterLogID,
+            volumeWindowMinutes: volumeWindowMinutes,
+            volumeOffset: volumeOffset
+        ))
     }
 
     private func encodedJSON<T: Encodable>(_ value: T) -> String {

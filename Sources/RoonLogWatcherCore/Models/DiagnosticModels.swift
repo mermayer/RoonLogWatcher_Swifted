@@ -33,6 +33,12 @@ public struct DiagnosticIncident: Codable, Identifiable, Sendable {
     public var eventCount: Int
     public var healthImpact: Int
     public var evidence: [DiagnosticEvidence]
+    public var durationSeconds: Double? = nil
+    public var dataBytes: Int? = nil
+    public var currentValue: Double? = nil
+    public var baselineValue: Double? = nil
+    public var unit: String? = nil
+    public var details: [String]? = nil
 }
 
 public struct DiagnosticPrediction: Codable, Identifiable, Sendable {
@@ -49,6 +55,27 @@ public struct DiagnosticPrediction: Codable, Identifiable, Sendable {
     public var changePerHour: Double?
     public var unit: String?
     public var evidence: [String]
+}
+
+public struct DiagnosticMetricSummary: Codable, Identifiable, Sendable {
+    public var id: String
+    public var kind: String
+    public var entity: String
+    public var severity: Severity
+    public var title: String
+    public var summary: String
+    public var observedAt: Date
+    public var windowMinutes: Double
+    public var sampleCount: Int
+    public var failureCount: Int
+    public var totalBytes: Int?
+    public var averageValue: Double?
+    public var maximumValue: Double?
+    public var latestValue: Double?
+    public var baselineValue: Double?
+    public var changeValue: Double?
+    public var unit: String?
+    public var details: [String]
 }
 
 public struct AdaptiveResourceBaseline: Codable, Sendable {
@@ -78,6 +105,8 @@ public struct RoonRuntimeTelemetry: Codable, Sendable {
 public struct DiagnosticAnalysisSnapshot: Codable, Sendable {
     public var telemetry: RoonRuntimeTelemetry
     public var baseline: AdaptiveResourceBaseline
+    public var metrics: [DiagnosticMetricSummary]
+    public var metricTotalCount: Int
     public var incidents: [DiagnosticIncident]
     public var incidentTotalCount: Int
     public var activeIncidentCount: Int

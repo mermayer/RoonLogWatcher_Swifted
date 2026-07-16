@@ -154,6 +154,7 @@ public final class RuntimeStore {
 
     public func ingest(file: String, line: String, events: [RuntimeEvent], mode newMode: RuntimeMode) {
         lock.withLock {
+            let safeEvents = events.map(LogRedactor.event)
             let wasFirstLine = processedLines == 0
             if mode != newMode {
                 mode = newMode
@@ -163,28 +164,31 @@ public final class RuntimeStore {
             sequence += 1
 
             let now = Date()
-            let severity = events.map(\.severity).maxSeverity ?? .info
+            let severity = safeEvents.map(\.severity).maxSeverity ?? .info
             let sourceName = sources[file]?.name ?? Self.displaySourceName(file)
             let entry = LogLine(
                 id: sequence,
                 receivedAt: now,
                 source: sourceName,
-                text: Self.truncatedLogLine(line, maxCharacters: configuration.maxLogLineCharacters),
+                text: Self.truncatedLogLine(
+                    LogRedactor.redact(line),
+                    maxCharacters: configuration.maxLogLineCharacters
+                ),
                 severity: severity
             )
             lastReceivedLog = entry
-            if configuration.showAllLogLines || !events.isEmpty {
-                let evicted = logHistory.appendEvicting(entry)
+            if configuration.showAllLogLines || !safeEvents.isEmpty {
+                _ = logHistory.appendEvicting(entry)
                 appendLogVolume(entry)
-                if let evicted {
-                    removeLogVolume(evicted)
-                }
             }
 
-            if !events.contains(where: { $0.domain == "memory" }) {
+            if !safeEvents.contains(where: { $0.domain == "memory" }) {
                 let context = MemoryContextLine(
-                    time: events.first?.time ?? timestampParser.parse(line, relativeTo: now) ?? now,
-                    message: Self.truncatedLogLine(line, maxCharacters: min(configuration.maxLogLineCharacters, 600)),
+                    time: safeEvents.first?.time ?? timestampParser.parse(line, relativeTo: now) ?? now,
+                    message: Self.truncatedLogLine(
+                        LogRedactor.redact(line),
+                        maxCharacters: min(configuration.maxLogLineCharacters, 600)
+                    ),
                     source: sourceName,
                     byteCount: line.utf8.count
                 )
@@ -212,11 +216,11 @@ public final class RuntimeStore {
             }
             sources[file] = source
 
-            if wasFirstLine || events.contains(where: Self.eventAffectsHealth) {
+            if wasFirstLine || safeEvents.contains(where: Self.eventAffectsHealth) {
                 invalidateHealth()
             }
 
-            for event in events {
+            for event in safeEvents {
                 timeline.append(event)
                 switch event.severity {
                 case .warning:
@@ -243,12 +247,14 @@ public final class RuntimeStore {
                     memoryByMetric[event.title] = metric
                     memoryHistory.append(metric)
                     appendPhysicalMemoryTrendSampleIfNeeded(metric)
+                } else if event.type == "memory.metric.unavailable" {
+                    memoryByMetric[event.title] = nil
                 }
             }
-            if let sample = Self.memoryStatsSample(from: events, source: sourceName) {
+            if let sample = Self.memoryStatsSample(from: safeEvents, source: sourceName) {
                 appendMemoryInsightIfNeeded(sample: sample, now: now)
             }
-            diagnosticEngine.ingest(events: events, line: line, receivedAt: now, source: sourceName)
+            diagnosticEngine.ingest(events: safeEvents, line: line, receivedAt: now, source: sourceName)
             pruneMemoryInsightHistory(now: now)
         }
     }
@@ -262,7 +268,7 @@ public final class RuntimeStore {
                 type: "system.message",
                 severity: severity,
                 title: title,
-                message: message,
+                message: LogRedactor.redact(message),
                 source: "RoonLogWatcher",
                 valueMB: nil,
                 zone: nil
@@ -277,13 +283,23 @@ public final class RuntimeStore {
 
     public func snapshot() -> RuntimeSnapshot {
         lock.withLock {
-            makeSnapshot(now: Date(), compact: false, logsAfterID: nil)
+            makeSnapshot(now: Date(), compact: false, logsAfterID: nil, volumeWindowMinutes: nil, volumeOffset: 0)
         }
     }
 
-    public func liveSnapshot(logsAfterID: Int? = nil) -> RuntimeSnapshot {
+    public func liveSnapshot(
+        logsAfterID: Int? = nil,
+        volumeWindowMinutes: Int? = nil,
+        volumeOffset: Int = 0
+    ) -> RuntimeSnapshot {
         lock.withLock {
-            makeSnapshot(now: Date(), compact: true, logsAfterID: logsAfterID)
+            makeSnapshot(
+                now: Date(),
+                compact: true,
+                logsAfterID: logsAfterID,
+                volumeWindowMinutes: volumeWindowMinutes,
+                volumeOffset: volumeOffset
+            )
         }
     }
 
@@ -311,7 +327,19 @@ public final class RuntimeStore {
         }
     }
 
-    private func makeSnapshot(now: Date, compact: Bool, logsAfterID: Int?) -> RuntimeSnapshot {
+    public func diagnosticMetricCollection() -> [DiagnosticMetricSummary] {
+        lock.withLock {
+            diagnosticEngine.metricCollection(now: Date())
+        }
+    }
+
+    private func makeSnapshot(
+        now: Date,
+        compact: Bool,
+        logsAfterID: Int?,
+        volumeWindowMinutes: Int?,
+        volumeOffset: Int
+    ) -> RuntimeSnapshot {
         let sortedSources = sources.values.sorted { $0.name < $1.name }
         let sortedMemory = memoryByMetric.values.sorted { $0.metric < $1.metric }
         let fullDiagnostics = diagnosticEngine.snapshot(now: now, compact: false)
@@ -345,7 +373,11 @@ public final class RuntimeStore {
             watchedSources: sortedSources,
             memory: sortedMemory,
             recentLogs: returnedLogs,
-            volumeBuckets: volumeBuckets(now: now),
+            volumeBuckets: volumeBuckets(
+                now: now,
+                windowMinutes: volumeWindowMinutes,
+                offset: volumeOffset
+            ),
             timeline: compact ? [] : Array(timeline.items.suffix(240).reversed()),
             alerts: compact ? compactAlertPreview(allAlerts) : allAlerts,
             alertTotalCount: allAlerts.count,
@@ -495,10 +527,21 @@ public final class RuntimeStore {
         )
     }
 
-    private func volumeBuckets(now: Date, bucketCount: Int = 60) -> [LogVolumeBucket] {
+    private func volumeBuckets(
+        now: Date,
+        windowMinutes requestedWindowMinutes: Int? = nil,
+        offset requestedOffset: Int = 0,
+        bucketCount: Int = 60
+    ) -> [LogVolumeBucket] {
         let safeBucketCount = max(1, bucketCount)
-        let windowSeconds = TimeInterval(configuration.logVolumeWindowMinutes * 60)
-        let endInterval = floor(now.timeIntervalSince1970 / 60) * 60 + 60
+        let supportedWindows = [15, 60, 180, 360]
+        let windowMinutes = requestedWindowMinutes.flatMap { supportedWindows.contains($0) ? $0 : nil }
+            ?? configuration.logVolumeWindowMinutes
+        let windowSeconds = TimeInterval(windowMinutes * 60)
+        let maximumOffset = max(0, Int(maximumLogVolumeWindow / windowSeconds) - 1)
+        let safeOffset = min(maximumOffset, max(0, requestedOffset))
+        let currentEndInterval = floor(now.timeIntervalSince1970 / 60) * 60 + 60
+        let endInterval = currentEndInterval - TimeInterval(safeOffset) * windowSeconds
         let end = Date(timeIntervalSince1970: endInterval)
         let start = end.addingTimeInterval(-windowSeconds)
         let bucketSeconds = windowSeconds / TimeInterval(safeBucketCount)
@@ -534,19 +577,6 @@ public final class RuntimeStore {
         if line.severity == .warning { counts.warning += 1 }
         if line.severity == .critical { counts.critical += 1 }
         logVolumeSlices[slice] = counts
-    }
-
-    private func removeLogVolume(_ line: LogLine) {
-        let slice = Int(floor(line.receivedAt.timeIntervalSince1970 / logVolumeSliceSeconds))
-        guard var counts = logVolumeSlices[slice] else { return }
-        counts.total = max(0, counts.total - 1)
-        if line.severity == .warning { counts.warning = max(0, counts.warning - 1) }
-        if line.severity == .critical { counts.critical = max(0, counts.critical - 1) }
-        if counts.total == 0 {
-            logVolumeSlices[slice] = nil
-        } else {
-            logVolumeSlices[slice] = counts
-        }
     }
 
     private func rebuildLogVolumeSlices() {

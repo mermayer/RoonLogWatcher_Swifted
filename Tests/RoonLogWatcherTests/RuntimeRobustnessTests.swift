@@ -194,6 +194,39 @@ final class RuntimeRobustnessTests: XCTestCase {
         XCTAssertEqual(delta.recentLogs.map(\.text), ["Info: next"])
     }
 
+    func testLiveSnapshotHonorsLogVolumeWindowAndHistoryOffset() throws {
+        let store = RuntimeStore()
+        store.ingest(file: "/tmp/RoonServer_log.txt", line: "Info: current", events: [], mode: .live)
+
+        let current = store.liveSnapshot(volumeWindowMinutes: 15, volumeOffset: 0).volumeBuckets
+        let previous = store.liveSnapshot(volumeWindowMinutes: 15, volumeOffset: 1).volumeBuckets
+        let sixHours = store.liveSnapshot(volumeWindowMinutes: 360, volumeOffset: 0).volumeBuckets
+
+        XCTAssertEqual(current.count, 60)
+        XCTAssertEqual(previous.count, 60)
+        XCTAssertEqual(sixHours.count, 60)
+        XCTAssertEqual(try XCTUnwrap(current.last?.endAt).timeIntervalSince(try XCTUnwrap(current.first?.startAt)), 15 * 60, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(sixHours.last?.endAt).timeIntervalSince(try XCTUnwrap(sixHours.first?.startAt)), 6 * 60 * 60, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(current.last?.endAt).timeIntervalSince(try XCTUnwrap(previous.last?.endAt)), 15 * 60, accuracy: 1)
+        XCTAssertEqual(current.reduce(0) { $0 + $1.total }, 1)
+        XCTAssertEqual(previous.reduce(0) { $0 + $1.total }, 0)
+    }
+
+    func testLogVolumeCountsOutliveTheRenderedLogRetention() {
+        var configuration = AppConfiguration.default
+        configuration.recentLogMaxLines = 100
+        configuration.logHistoryMaxLines = 100
+        let store = RuntimeStore(configuration: configuration)
+
+        for index in 0..<150 {
+            store.ingest(file: "/tmp/RoonServer_log.txt", line: "Info: volume \(index)", events: [], mode: .live)
+        }
+
+        let snapshot = store.liveSnapshot(volumeWindowMinutes: 15)
+        XCTAssertEqual(snapshot.recentLogs.count, 100)
+        XCTAssertEqual(snapshot.volumeBuckets.reduce(0) { $0 + $1.total }, 150)
+    }
+
     func testHealthReturnsEverySignalUsedForScore() {
         let now = Date()
         let store = RuntimeStore()

@@ -92,15 +92,12 @@ final class AppConfigurationTests: XCTestCase {
         var config = AppConfiguration.default
         config.healthRules.logStaleWarningSeconds = 1
         config.healthRules.logStaleCriticalSeconds = 2
-        config.healthRules.raatWarningDisconnects = 10
-        config.healthRules.raatCriticalDisconnects = 2
         config.healthRules.diskCriticalFreeMB = 100_000
         config.healthRules.diskWarningFreeMB = 1_000
 
         let rules = config.normalized().healthRules
         XCTAssertEqual(rules.logStaleWarningSeconds, 15)
         XCTAssertGreaterThan(rules.logStaleCriticalSeconds, rules.logStaleWarningSeconds)
-        XCTAssertEqual(rules.raatCriticalDisconnects, rules.raatWarningDisconnects)
         XCTAssertLessThanOrEqual(rules.diskCriticalFreeMB, rules.diskWarningFreeMB)
     }
 
@@ -138,7 +135,7 @@ final class AppConfigurationTests: XCTestCase {
         let snapshot = store.snapshot()
         XCTAssertEqual(snapshot.recentLogs.count, 100)
         XCTAssertEqual(snapshot.volumeBuckets.count, 60)
-        XCTAssertEqual(snapshot.volumeBuckets.reduce(0) { $0 + $1.total }, 120)
+        XCTAssertEqual(snapshot.volumeBuckets.reduce(0) { $0 + $1.total }, 125)
         XCTAssertTrue(snapshot.recentLogs.allSatisfy { $0.text.count <= 220 })
         XCTAssertTrue(snapshot.recentLogs.allSatisfy { $0.text.contains("[truncated]") })
 

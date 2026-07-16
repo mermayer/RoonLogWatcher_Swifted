@@ -193,9 +193,6 @@ public struct HealthRuleConfiguration: Codable, Equatable, Sendable {
     public var logStaleCriticalSeconds: Double
     public var eventWindowMinutes: Double
     public var warningBurstCount: Int
-    public var raatWindowMinutes: Double
-    public var raatWarningDisconnects: Int
-    public var raatCriticalDisconnects: Int
     public var databaseWindowMinutes: Double
     public var playbackWindowMinutes: Double
     public var playbackCriticalCount: Int
@@ -212,9 +209,6 @@ public struct HealthRuleConfiguration: Codable, Equatable, Sendable {
         logStaleCriticalSeconds: Double = 600,
         eventWindowMinutes: Double = 15,
         warningBurstCount: Int = 5,
-        raatWindowMinutes: Double = 15,
-        raatWarningDisconnects: Int = 2,
-        raatCriticalDisconnects: Int = 5,
         databaseWindowMinutes: Double = 30,
         playbackWindowMinutes: Double = 15,
         playbackCriticalCount: Int = 5,
@@ -230,9 +224,6 @@ public struct HealthRuleConfiguration: Codable, Equatable, Sendable {
         self.logStaleCriticalSeconds = logStaleCriticalSeconds
         self.eventWindowMinutes = eventWindowMinutes
         self.warningBurstCount = warningBurstCount
-        self.raatWindowMinutes = raatWindowMinutes
-        self.raatWarningDisconnects = raatWarningDisconnects
-        self.raatCriticalDisconnects = raatCriticalDisconnects
         self.databaseWindowMinutes = databaseWindowMinutes
         self.playbackWindowMinutes = playbackWindowMinutes
         self.playbackCriticalCount = playbackCriticalCount
@@ -251,9 +242,6 @@ public struct HealthRuleConfiguration: Codable, Equatable, Sendable {
         copy.logStaleCriticalSeconds = min(172_800, max(copy.logStaleWarningSeconds + 30, copy.logStaleCriticalSeconds))
         copy.eventWindowMinutes = min(24 * 60, max(1, copy.eventWindowMinutes))
         copy.warningBurstCount = min(500, max(1, copy.warningBurstCount))
-        copy.raatWindowMinutes = min(24 * 60, max(1, copy.raatWindowMinutes))
-        copy.raatWarningDisconnects = min(500, max(1, copy.raatWarningDisconnects))
-        copy.raatCriticalDisconnects = min(500, max(copy.raatWarningDisconnects, copy.raatCriticalDisconnects))
         copy.databaseWindowMinutes = min(24 * 60, max(1, copy.databaseWindowMinutes))
         copy.playbackWindowMinutes = min(24 * 60, max(1, copy.playbackWindowMinutes))
         copy.playbackCriticalCount = min(500, max(1, copy.playbackCriticalCount))
