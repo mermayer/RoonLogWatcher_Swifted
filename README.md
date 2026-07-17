@@ -383,13 +383,71 @@ The main health-rule defaults are:
 - memory near-threshold warning: `92%` of the configured metric threshold
 - memory growth window / threshold: `30 min` / `200 MB`
 
-## Run
+## Build from Source
+
+### Requirements
+
+- A Mac running macOS 14 Sonoma or newer.
+- Xcode 15 or newer, or the matching Xcode Command Line Tools. The package uses
+  Swift tools version 5.9 and has no third-party package dependencies.
+- Git for downloading and updating the repository.
+- Roon logs are optional for the first launch because the app can use its demo
+  feed when no local Roon installation is found.
+
+Install the Command Line Tools if `swift --version` is not available:
+
+```bash
+xcode-select --install
+```
+
+### Download
+
+Clone the repository and enter the project directory:
+
+```bash
+git clone https://github.com/mermayer/RoonLogWatcher_Swifted.git
+cd RoonLogWatcher_Swifted
+```
+
+To update an existing checkout later, run `git pull` from that directory.
+
+### Create and Launch the App
+
+The included helper builds the Swift package, assembles a macOS application
+bundle at `dist/RoonLogWatcher.app` and launches it as a menu bar app:
 
 ```bash
 ./script/build_and_run.sh
 ```
 
-## Test
+Use the verification mode to build, launch and confirm that the process started:
+
+```bash
+./script/build_and_run.sh --verify
+```
+
+After a successful build, the app can be opened again with:
+
+```bash
+open dist/RoonLogWatcher.app
+```
+
+The locally assembled bundle is intended for use on the Mac that built it. It is
+not Developer ID signed or notarized; distributing it to other Macs requires the
+usual Apple signing and notarization steps.
+
+### Release Build and Tests
+
+To compile an optimized standalone executable with SwiftPM:
+
+```bash
+swift build -c release
+```
+
+The executable is written to `.build/release/RoonLogWatcher`. This command does
+not assemble the `dist/RoonLogWatcher.app` bundle described above.
+
+Run the complete test suite before making local changes available to others:
 
 ```bash
 swift test
