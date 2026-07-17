@@ -299,7 +299,8 @@ public final class LocalSystemSampler {
             proc_pidpath(pid, pointer.baseAddress, UInt32(pointer.count))
         }
         guard length > 0 else { return nil }
-        return String(cString: buffer)
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private static func processResourceCounters(pid: pid_t) -> ProcessResourceCounters? {
@@ -353,9 +354,11 @@ public final class LocalSystemSampler {
 
     private static func vmSwapCounters() -> (pageSize: UInt64, swapIns: UInt64, swapOuts: UInt64)? {
         var statistics = vm_statistics64()
+        var pageSize: vm_size_t = 0
         var count = mach_msg_type_number_t(
             MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size
         )
+        guard host_page_size(mach_host_self(), &pageSize) == KERN_SUCCESS else { return nil }
         let result = withUnsafeMutablePointer(to: &statistics) { pointer in
             pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
                 host_statistics64(mach_host_self(), HOST_VM_INFO64, rebound, &count)
@@ -363,7 +366,7 @@ public final class LocalSystemSampler {
         }
         guard result == KERN_SUCCESS else { return nil }
         return (
-            pageSize: UInt64(vm_kernel_page_size),
+            pageSize: UInt64(pageSize),
             swapIns: UInt64(statistics.swapins),
             swapOuts: UInt64(statistics.swapouts)
         )

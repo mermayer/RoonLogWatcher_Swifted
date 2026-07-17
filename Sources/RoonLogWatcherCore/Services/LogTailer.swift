@@ -1,7 +1,8 @@
 import Darwin
 import Foundation
 
-public final class LogTailer {
+// Mutable tailing state is confined to the private serial queue.
+public final class LogTailer: @unchecked Sendable {
     private let discoverer: RoonLogDiscoverer
     private let configStore: AppConfigStore?
     private let onLine: (String, String) -> Void

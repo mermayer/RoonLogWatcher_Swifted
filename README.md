@@ -388,11 +388,18 @@ The main health-rule defaults are:
 ### Requirements
 
 - A Mac running macOS 14 Sonoma or newer.
-- Xcode 15 or newer, or the matching Xcode Command Line Tools. The package uses
-  Swift tools version 5.9 and has no third-party package dependencies.
+- Xcode 16 or newer, or matching Xcode Command Line Tools with Swift 6. The
+  package enables the Swift 6 language mode and has no third-party package
+  dependencies. This release was built and tested with Xcode 26.6 and Swift
+  6.3.3.
 - Git for downloading and updating the repository.
 - Roon logs are optional for the first launch because the app can use its demo
   feed when no local Roon installation is found.
+
+The manifest now declares `swift-tools-version: 6.0` instead of 5.9. This value
+selects the minimum SwiftPM manifest API and Swift language generation; it does
+not restrict builds to the Swift 6.0 compiler. Newer Swift 6 toolchains such as
+Swift 6.3.3 compile the package normally.
 
 Install the Command Line Tools if `swift --version` is not available:
 
@@ -454,6 +461,17 @@ swift test
 ```
 
 ## Changelog
+
+### [v0.3.1](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.3.1) - Swift 6 and Native App Icon - 2026-07-17
+
+- Added a native macOS application icon to locally built app bundles.
+- Raised the package manifest from Swift tools 5.9 to 6.0 and migrated all
+  targets to the Swift 6 language mode. The release was validated with Swift
+  6.3.3 from Xcode 26.6.
+- Replaced direct access to the shared Mach page-size variable with the safe
+  `host_page_size` API and modernized process-path UTF-8 decoding.
+- Declared the serial-queue-isolated log tailer as explicitly Sendable for
+  Swift 6 concurrency checking.
 
 ### [v0.3.0](https://github.com/mermayer/RoonLogWatcher_Swifted/releases/tag/v0.3.0) - Context-Aware Diagnostics and Operational Trends - 2026-07-16
 
